@@ -123,12 +123,18 @@ gchar *api_meta_json(const Api *api) {
     append_kv(out, "firmware", api->device.firmware, TRUE);
     append_kv(out, "hostname", api->device.hostname, TRUE);
 
-    g_string_append(out, "},\"store\":{\"persisted\":false,\"tiers\":[");
+    g_string_append(out, "},\"store\":{");
+    g_string_append_printf(out, "\"persisted\":%s,", api->persist_path ? "true" : "false");
+    append_kv(out, "persistPath", api->persist_path ? api->persist_path : "", FALSE);
+    g_string_append(out, ",\"tiers\":[");
     for (guint i = 0; i < STORE_TIERS; i++) {
         const StoreTier *tier = &api->store->tiers[i];
-        g_string_append_printf(out, "%s{\"interval\":%u,\"capacity\":%u,\"span\":%u,\"points\":%u}",
+        g_string_append_printf(out,
+                               "%s{\"interval\":%u,\"capacity\":%u,\"span\":%u,\"points\":%u,"
+                               "\"persisted\":%s}",
                                i ? "," : "", tier->interval_s, tier->capacity,
-                               store_tier_span_s(api->store, i), tier->count);
+                               store_tier_span_s(api->store, i), tier->count,
+                               (api->persist_path && i == STORE_TIERS - 1) ? "true" : "false");
     }
     g_string_append_printf(out,
                            "],\"bytes\":%zu},\"windows\":[300,900,1800,3600,21600,86400,604800,2592000],",
@@ -294,8 +300,117 @@ gchar *api_health_json(const Api *api) {
     GString *out = g_string_new(NULL);
     g_string_append_printf(out,
                            "{\"ok\":true,\"metrics\":%u,\"uptime\":%" G_GINT64_FORMAT
-                           ",\"samples\":%u,\"bytes\":%zu}",
+                           ",\"samples\":%u,\"bytes\":%zu,\"persisted\":%s}",
                            api->registry->count, (gint64)time(NULL) - api->started,
-                           api->store->tiers[0].count, store_bytes(api->store));
+                           api->store->tiers[0].count, store_bytes(api->store),
+                           api->persist_path ? "true" : "false");
+    return take(out);
+}
+
+/* ---------------------------------------------------------- prometheus */
+
+/* Maps a unit to the suffix Prometheus convention expects. */
+static const char *unit_suffix(const char *unit) {
+    if (strcmp(unit, "%") == 0) return "_percent";
+    if (strcmp(unit, "B") == 0) return "_bytes";
+    if (strcmp(unit, "B/s") == 0) return "_bytes_per_second";
+    if (strcmp(unit, "C") == 0) return "_celsius";
+    if (strcmp(unit, "MHz") == 0) return "_megahertz";
+    if (strcmp(unit, "Mb/s") == 0) return "_megabits_per_second";
+    if (strcmp(unit, "s") == 0) return "_seconds";
+    if (strcmp(unit, "/s") == 0) return "_per_second";
+    return "";
+}
+
+/* Per-device ids like net.eth0.rx_bps become a single metric name with a label,
+ * which is what makes them aggregatable in PromQL. */
+static const char *label_key_for(const char *group_prefix) {
+    if (strcmp(group_prefix, "net") == 0) return "interface";
+    if (strcmp(group_prefix, "disk") == 0) return "device";
+    if (strcmp(group_prefix, "fs") == 0) return "filesystem";
+    if (strcmp(group_prefix, "cpu") == 0) return "core";
+    return "instance";
+}
+
+static void prometheus_name(const MetricDef *def,
+                            char *name,
+                            gsize name_len,
+                            char *label_key,
+                            gsize label_key_len,
+                            char *label_value,
+                            gsize label_value_len) {
+    label_key[0] = '\0';
+    label_value[0] = '\0';
+    gchar **parts = g_strsplit(def->id, ".", -1);
+    guint n = g_strv_length(parts);
+
+    if (n == 3) {
+        const char *prefix = parts[0];
+        const char *device = parts[1];
+        const char *leaf = parts[2];
+        g_strlcpy(label_key, label_key_for(prefix), label_key_len);
+        /* cpu.core0.usage must not collide with the aggregate cpu.usage. */
+        if (strcmp(prefix, "cpu") == 0 && g_str_has_prefix(device, "core")) {
+            g_snprintf(name, name_len, "axis_cpu_core_%s%s", leaf, unit_suffix(def->unit));
+            g_strlcpy(label_value, device + strlen("core"), label_value_len);
+        } else {
+            g_snprintf(name, name_len, "axis_%s_%s%s", prefix, leaf, unit_suffix(def->unit));
+            g_strlcpy(label_value, device, label_value_len);
+        }
+    } else {
+        gchar *flat = g_strjoinv("_", parts);
+        g_snprintf(name, name_len, "axis_%s%s", flat, unit_suffix(def->unit));
+        g_free(flat);
+    }
+
+    g_strfreev(parts);
+}
+
+gchar *api_prometheus_text(const Api *api) {
+    float *values = g_new(float, api->registry->count);
+    gint64 timestamp = 0;
+    GString *out = g_string_new(NULL);
+
+    if (!store_latest(api->store, values, &timestamp)) {
+        g_free(values);
+        return take(out);
+    }
+
+    g_string_append_printf(out,
+                           "# HELP axis_device_info Device identity, always 1.\n"
+                           "# TYPE axis_device_info gauge\n"
+                           "axis_device_info{model=\"%s\",serial=\"%s\",firmware=\"%s\"} 1\n",
+                           api->device.model, api->device.serial, api->device.firmware);
+
+    /* HELP/TYPE must appear once per name, but several ids share a name once
+     * the device part becomes a label, so emitted names are tracked. */
+    GHashTable *declared = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
+    for (guint i = 0; i < api->registry->count; i++) {
+        if (isnan(values[i]))
+            continue;
+
+        const MetricDef *def = &api->registry->defs[i];
+        char name[160];
+        char label_key[32];
+        char label_value[96];
+        prometheus_name(def, name, sizeof(name), label_key, sizeof(label_key), label_value,
+                        sizeof(label_value));
+
+        if (!g_hash_table_contains(declared, name)) {
+            g_hash_table_add(declared, g_strdup(name));
+            g_string_append_printf(out, "# HELP %s %s\n# TYPE %s gauge\n", name, def->label, name);
+        }
+
+        char buf[G_ASCII_DTOSTR_BUF_SIZE];
+        g_ascii_formatd(buf, sizeof(buf), "%.7g", values[i]);
+        if (label_value[0])
+            g_string_append_printf(out, "%s{%s=\"%s\"} %s\n", name, label_key, label_value, buf);
+        else
+            g_string_append_printf(out, "%s %s\n", name, buf);
+    }
+
+    g_hash_table_destroy(declared);
+    g_free(values);
     return take(out);
 }

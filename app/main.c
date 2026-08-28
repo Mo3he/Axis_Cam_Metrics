@@ -25,6 +25,7 @@
 #include "api.h"
 #include "collect.h"
 #include "metrics.h"
+#include "persist.h"
 #include "store.h"
 
 #define APP_NAME           "Metrics"
@@ -50,9 +51,12 @@ static Parameter parameters[] = {
 static AXParameter *parameter_handle;
 static GMainLoop *main_loop;
 
+static void sse_broadcast(void);
+
 static MetricRegistry registry;
 static Collector *collector;
 static Store *store;
+static Persist *persist;
 static Api api;
 static float *sample_buffer;
 static guint sample_timer;
@@ -98,10 +102,16 @@ static void load_parameter(Parameter *parameter) {
 
 /* ----------------------------------------------------------------- sampler */
 
+static void on_coarse_sample(const float *values, gint64 timestamp, gpointer user_data) {
+    (void)user_data;
+    persist_append(persist, values, timestamp);
+}
+
 static gboolean on_sample_tick(gpointer user_data) {
     (void)user_data;
     collector_sample(collector, sample_buffer);
     store_push(store, sample_buffer, (gint64)time(NULL));
+    sse_broadcast();
     return G_SOURCE_CONTINUE;
 }
 
@@ -267,26 +277,93 @@ static void send_json(GOutputStream *out, gchar *json) {
     g_free(json);
 }
 
-static void handle_request(GOutputStream *out, const char *method, const char *path, const char *body) {
+/* ---------------------------------------------------------- event stream */
+
+/* Connections held open for server-sent events. The listener is synchronous,
+ * so these sockets are switched to non-blocking and a client that cannot keep
+ * up simply misses events rather than stalling the sampler. */
+static GList *sse_clients;
+
+static void sse_drop(GSocketConnection *connection) {
+    sse_clients = g_list_remove(sse_clients, connection);
+    g_io_stream_close(G_IO_STREAM(connection), NULL, NULL);
+    g_object_unref(connection);
+}
+
+static void sse_add(GSocketConnection *connection) {
+    GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(connection));
+    static const char headers[] = "HTTP/1.1 200 OK\r\n"
+                                  "Content-Type: text/event-stream\r\n"
+                                  "Cache-Control: no-store\r\n"
+                                  "X-Content-Type-Options: nosniff\r\n"
+                                  "Connection: keep-alive\r\n\r\n";
+    if (!g_output_stream_write_all(out, headers, sizeof(headers) - 1, NULL, NULL, NULL))
+        return;
+
+    g_socket_set_blocking(g_socket_connection_get_socket(connection), FALSE);
+    sse_clients = g_list_prepend(sse_clients, g_object_ref(connection));
+}
+
+static void sse_broadcast(void) {
+    if (!sse_clients)
+        return;
+
+    gchar *json = api_current_json(&api);
+    gchar *frame = g_strdup_printf("data: %s\n\n", json);
+    gsize length = strlen(frame);
+    g_free(json);
+
+    for (GList *node = sse_clients; node;) {
+        GList *next = node->next;
+        GSocketConnection *connection = node->data;
+        GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(connection));
+        GError *error = NULL;
+        gssize written = g_output_stream_write(out, frame, length, NULL, &error);
+
+        if (written < 0 && !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK))
+            sse_drop(connection);
+        g_clear_error(&error);
+        node = next;
+    }
+
+    g_free(frame);
+}
+
+/* Returns TRUE when the connection must stay open, which only the event stream
+ * needs. */
+static gboolean handle_request(GSocketConnection *connection,
+                              const char *method,
+                              const char *path,
+                              const char *body) {
+    GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(connection));
     gboolean is_get = strcmp(method, "GET") == 0;
 
-    if (is_get && route_is(path, "settings"))
+    if (is_get && route_is(path, "settings")) {
         send_json(out, settings_json());
-    else if (strcmp(method, "POST") == 0 && route_is(path, "settings")) {
+    } else if (strcmp(method, "POST") == 0 && route_is(path, "settings")) {
         gboolean changed = apply_settings_body(body);
         send_response(out, "200 OK", "application/json", "{\"status\":\"ok\"}");
         if (changed)
             restart_sampler();
-    } else if (is_get && route_is(path, "meta"))
+    } else if (is_get && route_is(path, "meta")) {
         send_json(out, api_meta_json(&api));
-    else if (is_get && route_is(path, "current"))
+    } else if (is_get && route_is(path, "current")) {
         send_json(out, api_current_json(&api));
-    else if (is_get && route_is(path, "series"))
+    } else if (is_get && route_is(path, "series")) {
         send_json(out, api_series_json(&api, path));
-    else if (is_get && route_is(path, "health"))
+    } else if (is_get && route_is(path, "health")) {
         send_json(out, api_health_json(&api));
-    else
+    } else if (is_get && route_is(path, "prometheus")) {
+        gchar *text = api_prometheus_text(&api);
+        send_response(out, "200 OK", "text/plain; version=0.0.4; charset=utf-8", text);
+        g_free(text);
+    } else if (is_get && route_is(path, "stream")) {
+        sse_add(connection);
+        return TRUE;
+    } else {
         send_response(out, "404 Not Found", "application/json", "{\"error\":\"not found\"}");
+    }
+    return FALSE;
 }
 
 static gboolean on_http_request(GSocketService *service, GSocketConnection *connection, GObject *source,
@@ -301,6 +378,7 @@ static gboolean on_http_request(GSocketService *service, GSocketConnection *conn
     gsize total = 0;
     gsize header_length = 0;
     glong content_length = 0;
+    gboolean keep_open = FALSE;
 
     while (total < sizeof(buffer) - 1) {
         gssize got = g_input_stream_read(in, buffer + total, sizeof(buffer) - 1 - total, NULL, NULL);
@@ -332,7 +410,7 @@ static gboolean on_http_request(GSocketService *service, GSocketConnection *conn
         gchar *path = g_malloc0(MAX_PATH_LENGTH);
         if (sscanf(buffer, "%7s %8191s", method, path) == 2) {
             gchar *request_body = g_strndup(buffer + header_length, total - header_length);
-            handle_request(out, method, path, request_body);
+            keep_open = handle_request(connection, method, path, request_body);
             g_free(request_body);
         } else {
             send_response(out, "400 Bad Request", "application/json", "{\"error\":\"bad request\"}");
@@ -340,7 +418,8 @@ static gboolean on_http_request(GSocketService *service, GSocketConnection *conn
         g_free(path);
     }
 
-    g_io_stream_close(G_IO_STREAM(connection), NULL, NULL);
+    if (!keep_open)
+        g_io_stream_close(G_IO_STREAM(connection), NULL, NULL);
     return TRUE;
 }
 
@@ -406,10 +485,20 @@ int main(void) {
     sample_buffer = g_new0(float, registry.count);
 
     guint interval = (guint)g_ascii_strtoull(parameter_value("SampleInterval"), NULL, 10);
-    store = store_new(registry.count, CLAMP(interval, 1, 10));
+    store = store_new(&registry, CLAMP(interval, 1, 10));
+
+    /* Only the coarse tier is persisted: it is the one whose window (30 days)
+     * is worthless if a reboot wipes it. */
+    persist = persist_open(&registry, &store->tiers[STORE_TIERS - 1]);
+    if (persist) {
+        persist_load(persist, store, STORE_TIERS - 1);
+        persist_sync(persist, store, STORE_TIERS - 1);
+        store_set_tier_callback(store, STORE_TIERS - 1, on_coarse_sample, NULL);
+    }
 
     api.registry = &registry;
     api.store = store;
+    api.persist_path = persist_path(persist);
     api.app_version = APP_VERSION;
     api.started = (gint64)time(NULL);
     api_read_device_info(&api.device, parameter_handle);
@@ -432,6 +521,7 @@ int main(void) {
     for (gsize i = 0; i < G_N_ELEMENTS(parameters); i++)
         g_free(parameters[i].value);
     g_free(sample_buffer);
+    persist_close(persist);
     store_free(store);
     collector_free(collector);
     metrics_registry_clear(&registry);

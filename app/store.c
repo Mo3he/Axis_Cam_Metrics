@@ -40,8 +40,10 @@ static gsize tier_bytes(const StoreTier *tier, guint n_metrics) {
     return (gsize)tier->capacity * (n_metrics * sizeof(float) + sizeof(gint64));
 }
 
-Store *store_new(guint n_metrics, guint base_interval_s) {
+Store *store_new(const MetricRegistry *registry, guint base_interval_s) {
+    guint n_metrics = registry->count;
     Store *store = g_new0(Store, 1);
+    store->registry = registry;
     store->n_metrics = n_metrics;
     g_mutex_init(&store->lock);
     store->latest = g_new0(float, n_metrics);
@@ -121,6 +123,10 @@ guint store_tier_span_s(const Store *store, guint tier_index) {
     return tier->interval_s * tier->capacity;
 }
 
+const MetricRegistry *store_registry(const Store *store) {
+    return store->registry;
+}
+
 static void tier_append(StoreTier *tier, guint n_metrics, const float *values, gint64 timestamp) {
     tier->timestamps[tier->head] = timestamp;
     memcpy(&tier->data[(gsize)tier->head * n_metrics], values, n_metrics * sizeof(float));
@@ -129,7 +135,20 @@ static void tier_append(StoreTier *tier, guint n_metrics, const float *values, g
         tier->count++;
 }
 
+void store_set_tier_callback(Store *store, guint tier_index, StoreTierCallback callback, gpointer user_data) {
+    if (tier_index >= STORE_TIERS)
+        return;
+    g_mutex_lock(&store->lock);
+    store->tiers[tier_index].callback = callback;
+    store->tiers[tier_index].callback_data = user_data;
+    g_mutex_unlock(&store->lock);
+}
+
 void store_push(Store *store, const float *values, gint64 timestamp) {
+    StoreTierCallback pending[STORE_TIERS] = {NULL};
+    gpointer pending_data[STORE_TIERS] = {NULL};
+    float *pending_values[STORE_TIERS] = {NULL};
+
     g_mutex_lock(&store->lock);
 
     memcpy(store->latest, values, store->n_metrics * sizeof(float));
@@ -154,6 +173,11 @@ void store_push(Store *store, const float *values, gint64 timestamp) {
             for (guint m = 0; m < store->n_metrics; m++)
                 store->scratch[m] = tier->acc_n[m] ? (float)(tier->acc[m] / tier->acc_n[m]) : NAN;
             tier_append(tier, store->n_metrics, store->scratch, timestamp);
+            if (tier->callback) {
+                pending[i] = tier->callback;
+                pending_data[i] = tier->callback_data;
+                pending_values[i] = g_memdup2(store->scratch, store->n_metrics * sizeof(float));
+            }
             memset(tier->acc, 0, store->n_metrics * sizeof(double));
             memset(tier->acc_n, 0, store->n_metrics * sizeof(guint));
             tier->acc_start = timestamp;
@@ -161,6 +185,13 @@ void store_push(Store *store, const float *values, gint64 timestamp) {
     }
 
     g_mutex_unlock(&store->lock);
+
+    for (guint i = 1; i < STORE_TIERS; i++) {
+        if (pending[i]) {
+            pending[i](pending_values[i], timestamp, pending_data[i]);
+            g_free(pending_values[i]);
+        }
+    }
 }
 
 gboolean store_latest(Store *store, float *out, gint64 *timestamp) {
@@ -170,6 +201,41 @@ gboolean store_latest(Store *store, float *out, gint64 *timestamp) {
         memcpy(out, store->latest, store->n_metrics * sizeof(float));
         if (timestamp)
             *timestamp = store->latest_ts;
+    }
+    g_mutex_unlock(&store->lock);
+    return ok;
+}
+
+void store_restore(Store *store, guint tier_index, const float *values, gint64 timestamp) {
+    if (tier_index >= STORE_TIERS)
+        return;
+    g_mutex_lock(&store->lock);
+    tier_append(&store->tiers[tier_index], store->n_metrics, values, timestamp);
+    g_mutex_unlock(&store->lock);
+}
+
+guint store_tier_count(Store *store, guint tier_index) {
+    if (tier_index >= STORE_TIERS)
+        return 0;
+    g_mutex_lock(&store->lock);
+    guint count = store->tiers[tier_index].count;
+    g_mutex_unlock(&store->lock);
+    return count;
+}
+
+gboolean store_tier_sample(Store *store, guint tier_index, guint index, float *out, gint64 *timestamp) {
+    if (tier_index >= STORE_TIERS)
+        return FALSE;
+
+    g_mutex_lock(&store->lock);
+    StoreTier *tier = &store->tiers[tier_index];
+    gboolean ok = index < tier->count;
+    if (ok) {
+        guint start = (tier->head + tier->capacity - tier->count) % tier->capacity;
+        guint slot = (start + index) % tier->capacity;
+        memcpy(out, &tier->data[(gsize)slot * store->n_metrics], store->n_metrics * sizeof(float));
+        if (timestamp)
+            *timestamp = tier->timestamps[slot];
     }
     g_mutex_unlock(&store->lock);
     return ok;

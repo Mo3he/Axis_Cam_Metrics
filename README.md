@@ -28,7 +28,8 @@ the device's own authenticated reverse proxy.
   buffers (1s, 15s and 5min resolution) that are sized against the device's RAM.
 - **No extra ports.** Everything is served on loopback and exposed only through
   the reverse proxy, so it inherits the device's authentication.
-- **No flash writes.** History is held in memory.
+- **Exports to whatever you already run:** JSON, server-sent events and a
+  Prometheus endpoint.
 
 ### Collected metrics
 
@@ -92,6 +93,8 @@ least `viewer` access.
 | `meta` | Device identity, store layout, and every metric's id, label, unit and group |
 | `current` | The latest sample as an id to value map |
 | `series?window=<seconds>&metrics=<id,id,...>` | History for the named metrics, with a shared timestamp array |
+| `stream` | Server-sent events, one `data:` frame per sample |
+| `prometheus` | Prometheus text exposition format |
 | `health` | Liveness, metric count, sample count and memory use |
 
 The tier is chosen from the requested window, so a 30 day request is answered
@@ -101,6 +104,41 @@ from the 5-minute buffer rather than by returning millions of points.
 curl -k --anyauth -u user:password \
   'https://<device>/local/Metrics/data/series?window=3600&metrics=cpu.usage,mem.usage'
 ```
+
+### Scraping with Prometheus
+
+The endpoints sit behind the device's own reverse proxy, which authenticates
+every request before the app sees it. HTTP basic auth is accepted, so Prometheus
+needs no special handling:
+
+```yaml
+scrape_configs:
+  - job_name: axis
+    scheme: https
+    tls_config: { insecure_skip_verify: true }
+    basic_auth: { username: metrics, password: <password> }
+    metrics_path: /local/Metrics/data/prometheus
+    static_configs:
+      - targets: ['192.168.0.10']
+```
+
+Create a dedicated device account with the **viewer** role for this. Viewer is
+enough to read `data/...` and cannot reach `api/...`, so a scraper credential
+cannot change any setting. Revoke it by deleting the account.
+
+## History and persistence
+
+The 5-minute tier is written to a fixed-size circular file on the SD card or
+disk, so the 7 day and 30 day views survive a restart or reboot. One sample is
+appended every five minutes, which is a few hundred bytes: negligible wear.
+
+It is deliberately never written to flash. A recorder has around 144 MB free on
+`/mnt/flash`, and that wear belongs on removable storage. If the device has no
+card or disk, history stays in memory, `meta` reports `persisted: false`, and the
+dashboard shows a banner on the long ranges.
+
+Samples are remapped by metric id when loaded, so adding an interface or
+inserting an SD card does not invalidate the saved history.
 
 ## Ports & security
 

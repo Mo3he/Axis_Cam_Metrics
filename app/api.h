@@ -21,6 +21,7 @@ typedef struct {
     Store *store;
     DeviceInfo device;
     const char *app_version;
+    const char *persist_path; /* NULL when history is memory-only. */
     gint64 started;
 } Api;
 
@@ -31,6 +32,9 @@ gchar *api_meta_json(const Api *api);
 gchar *api_current_json(const Api *api);
 gchar *api_series_json(const Api *api, const char *query);
 gchar *api_health_json(const Api *api);
+
+/* Prometheus text exposition format, for scrapers and Grafana. */
+gchar *api_prometheus_text(const Api *api);
 
 /* Extracts a query parameter from a request path, or NULL. Caller frees. */
 gchar *api_query_param(const char *query, const char *name);

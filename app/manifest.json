@@ -1,5 +1,14 @@
 {
   "schemaVersion": "2.0.0",
+  "resources": {
+    "linux": {
+      "user": {
+        "groups": [
+          "storage"
+        ]
+      }
+    }
+  },
   "acapPackageConf": {
     "setup": {
       "appName": "Metrics",
