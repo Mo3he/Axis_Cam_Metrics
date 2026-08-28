@@ -76,6 +76,37 @@ Settings are stored in the device's parameter store and are available from
 | Parameter | Default | Description |
 |---|---|---|
 | `SampleInterval` | `1` | Seconds between samples, 1 to 10. A slower interval buys a longer fine-grained window rather than less memory. |
+| `MqttEnabled` | `no` | Publish metrics to an MQTT broker. |
+| `MqttHost` | empty | Broker hostname or address. |
+| `MqttPort` | `1883` | Broker port. Defaults to 8883 when TLS is on and the port is unset. |
+| `MqttTls` | `no` | Connect with TLS, verifying against the device's CA store. |
+| `MqttUsername` | empty | Broker username. |
+| `MqttPassword` | empty | Broker password. Stored write-only. |
+| `MqttTopicPrefix` | empty | Defaults to `axis/<serial>/metrics`. |
+| `MqttInterval` | `30` | Seconds between state publishes. |
+| `MqttDiscovery` | `yes` | Publish Home Assistant discovery configs. |
+| `MqttDiscoveryAll` | `no` | Publish a config for every metric instead of a curated subset. |
+
+## MQTT
+
+With MQTT enabled the app publishes:
+
+| Topic | Payload |
+|---|---|
+| `<prefix>/status` | `online` or `offline`, retained. Set as the last will, and retracted on a clean shutdown. |
+| `<prefix>/state` | Retained JSON object of every current metric, keyed by id. |
+
+The client is Eclipse Paho, linked statically: AXIS OS 12 ships `libpaho` but
+OS 13 does not, and recorders have no device MQTT client API at all, so neither
+can be relied on. TLS uses the device's own OpenSSL 3 and CA trust store.
+
+### Home Assistant
+
+Discovery configs are published to `homeassistant/sensor/<serial>_<metric>/config`,
+grouped under one device per camera, with the availability topic wired up so
+entities go unavailable when the device does. By default a curated subset is
+exposed (CPU, memory, load, uptime, temperatures, filesystem usage and network
+throughput); `MqttDiscoveryAll` publishes every metric instead.
 
 The settings page reads and writes through the app's own endpoint at
 `/local/Metrics/api/settings`, served by the app itself and reachable only

@@ -30,6 +30,10 @@ void api_read_device_info(DeviceInfo *info, void *parameter_handle);
 /* Each returns a newly allocated JSON document. */
 gchar *api_meta_json(const Api *api);
 gchar *api_current_json(const Api *api);
+
+/* Just the id to value object, which is what MQTT and Home Assistant
+ * value_template expect. */
+gchar *api_current_values_json(const Api *api);
 gchar *api_series_json(const Api *api, const char *query);
 gchar *api_health_json(const Api *api);
 

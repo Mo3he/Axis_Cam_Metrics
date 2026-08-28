@@ -154,18 +154,8 @@ gchar *api_meta_json(const Api *api) {
     return take(out);
 }
 
-gchar *api_current_json(const Api *api) {
-    float *values = g_new(float, api->registry->count);
-    gint64 timestamp = 0;
-
-    if (!store_latest(api->store, values, &timestamp)) {
-        g_free(values);
-        return g_strdup("{\"timestamp\":0,\"values\":{}}");
-    }
-
-    GString *out = g_string_new(NULL);
-    g_string_append_printf(out, "{\"timestamp\":%" G_GINT64_FORMAT ",\"values\":{", timestamp);
-
+static void append_values_object(const Api *api, GString *out, const float *values) {
+    g_string_append_c(out, '{');
     gboolean first = TRUE;
     for (guint i = 0; i < api->registry->count; i++) {
         if (isnan(values[i]))
@@ -178,8 +168,36 @@ gchar *api_current_json(const Api *api) {
         g_string_append(out, "\":");
         append_number(out, values[i]);
     }
-    g_string_append(out, "}}");
+    g_string_append_c(out, '}');
+}
 
+gchar *api_current_json(const Api *api) {
+    float *values = g_new(float, api->registry->count);
+    gint64 timestamp = 0;
+
+    if (!store_latest(api->store, values, &timestamp)) {
+        g_free(values);
+        return g_strdup("{\"timestamp\":0,\"values\":{}}");
+    }
+
+    GString *out = g_string_new(NULL);
+    g_string_append_printf(out, "{\"timestamp\":%" G_GINT64_FORMAT ",\"values\":", timestamp);
+    append_values_object(api, out, values);
+    g_string_append_c(out, '}');
+
+    g_free(values);
+    return take(out);
+}
+
+gchar *api_current_values_json(const Api *api) {
+    float *values = g_new(float, api->registry->count);
+    if (!store_latest(api->store, values, NULL)) {
+        g_free(values);
+        return g_strdup("{}");
+    }
+
+    GString *out = g_string_new(NULL);
+    append_values_object(api, out, values);
     g_free(values);
     return take(out);
 }

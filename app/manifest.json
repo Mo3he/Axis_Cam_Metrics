@@ -36,7 +36,17 @@
         }
       ],
       "paramConfig": [
-        { "name": "SampleInterval", "default": "1", "type": "int:min=1,max=10" }
+        { "name": "SampleInterval", "default": "1", "type": "int:min=1,max=10" },
+        { "name": "MqttEnabled", "default": "no", "type": "bool:no,yes" },
+        { "name": "MqttHost", "default": "", "type": "string" },
+        { "name": "MqttPort", "default": "1883", "type": "int:min=1,max=65535" },
+        { "name": "MqttTls", "default": "no", "type": "bool:no,yes" },
+        { "name": "MqttUsername", "default": "", "type": "string" },
+        { "name": "MqttPassword", "default": "", "type": "password" },
+        { "name": "MqttTopicPrefix", "default": "", "type": "string" },
+        { "name": "MqttInterval", "default": "30", "type": "int:min=1,max=3600" },
+        { "name": "MqttDiscovery", "default": "yes", "type": "bool:no,yes" },
+        { "name": "MqttDiscoveryAll", "default": "no", "type": "bool:no,yes" }
       ]
     }
   }

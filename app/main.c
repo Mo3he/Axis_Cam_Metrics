@@ -25,6 +25,7 @@
 #include "api.h"
 #include "collect.h"
 #include "metrics.h"
+#include "mqtt.h"
 #include "persist.h"
 #include "store.h"
 
@@ -46,6 +47,16 @@ typedef struct {
 /* Must stay in sync with paramConfig in manifest.json. */
 static Parameter parameters[] = {
     {"SampleInterval", "1", FALSE, NULL},
+    {"MqttEnabled", "no", FALSE, NULL},
+    {"MqttHost", "", FALSE, NULL},
+    {"MqttPort", "1883", FALSE, NULL},
+    {"MqttTls", "no", FALSE, NULL},
+    {"MqttUsername", "", FALSE, NULL},
+    {"MqttPassword", "", TRUE, NULL},
+    {"MqttTopicPrefix", "", FALSE, NULL},
+    {"MqttInterval", "30", FALSE, NULL},
+    {"MqttDiscovery", "yes", FALSE, NULL},
+    {"MqttDiscoveryAll", "no", FALSE, NULL},
 };
 
 static AXParameter *parameter_handle;
@@ -57,6 +68,7 @@ static MetricRegistry registry;
 static Collector *collector;
 static Store *store;
 static Persist *persist;
+static Mqtt *mqtt;
 static Api api;
 static float *sample_buffer;
 static guint sample_timer;
@@ -112,7 +124,43 @@ static gboolean on_sample_tick(gpointer user_data) {
     collector_sample(collector, sample_buffer);
     store_push(store, sample_buffer, (gint64)time(NULL));
     sse_broadcast();
+    mqtt_tick(mqtt);
     return G_SOURCE_CONTINUE;
+}
+
+static gboolean parameter_is_yes(const char *name) {
+    return g_strcmp0(parameter_value(name), "yes") == 0;
+}
+
+static void apply_mqtt_settings(void) {
+    MqttConfig config;
+    memset(&config, 0, sizeof(config));
+
+    config.enabled = parameter_is_yes("MqttEnabled");
+    config.tls = parameter_is_yes("MqttTls");
+    config.discovery = parameter_is_yes("MqttDiscovery");
+    config.discovery_all = parameter_is_yes("MqttDiscoveryAll");
+    g_strlcpy(config.host, parameter_value("MqttHost"), sizeof(config.host));
+    g_strlcpy(config.username, parameter_value("MqttUsername"), sizeof(config.username));
+    g_strlcpy(config.password, parameter_value("MqttPassword"), sizeof(config.password));
+
+    config.port = (guint)g_ascii_strtoull(parameter_value("MqttPort"), NULL, 10);
+    if (config.port == 0 || config.port > 65535)
+        config.port = config.tls ? 8883 : 1883;
+
+    config.interval_s = (guint)g_ascii_strtoull(parameter_value("MqttInterval"), NULL, 10);
+    config.interval_s = CLAMP(config.interval_s, 1, 3600);
+
+    /* Default to the same shape as the device's own MQTT client so topics look
+     * familiar next to it. */
+    const char *prefix = parameter_value("MqttTopicPrefix");
+    if (prefix && *prefix)
+        g_strlcpy(config.topic_prefix, prefix, sizeof(config.topic_prefix));
+    else
+        g_snprintf(config.topic_prefix, sizeof(config.topic_prefix), "axis/%s/metrics",
+                   api.device.serial[0] ? api.device.serial : "device");
+
+    mqtt_apply(mqtt, &config);
 }
 
 static void restart_sampler(void) {
@@ -138,6 +186,7 @@ static void on_parameter_changed(const gchar *name, const gchar *value, gpointer
     parameter->value = g_strdup(value ? value : "");
     syslog(LOG_INFO, "parameter %s changed", parameter->name);
     restart_sampler();
+    apply_mqtt_settings();
 }
 
 /* ---------------------------------------------------------------- settings */
@@ -343,8 +392,10 @@ static gboolean handle_request(GSocketConnection *connection,
     } else if (strcmp(method, "POST") == 0 && route_is(path, "settings")) {
         gboolean changed = apply_settings_body(body);
         send_response(out, "200 OK", "application/json", "{\"status\":\"ok\"}");
-        if (changed)
+        if (changed) {
             restart_sampler();
+            apply_mqtt_settings();
+        }
     } else if (is_get && route_is(path, "meta")) {
         send_json(out, api_meta_json(&api));
     } else if (is_get && route_is(path, "current")) {
@@ -503,6 +554,8 @@ int main(void) {
     api.started = (gint64)time(NULL);
     api_read_device_info(&api.device, parameter_handle);
 
+    mqtt = mqtt_new(&api);
+
     syslog(LOG_INFO, "%s %s on %s (%s), %u metrics", APP_NAME, APP_VERSION,
            api.device.model[0] ? api.device.model : "unknown device", api.device.firmware, registry.count);
 
@@ -512,6 +565,7 @@ int main(void) {
 
     start_http_server();
     restart_sampler();
+    apply_mqtt_settings();
     on_sample_tick(NULL); /* Seed the counters so the first tick yields real rates. */
 
     g_main_loop_run(main_loop);
@@ -521,6 +575,7 @@ int main(void) {
     for (gsize i = 0; i < G_N_ELEMENTS(parameters); i++)
         g_free(parameters[i].value);
     g_free(sample_buffer);
+    mqtt_free(mqtt);
     persist_close(persist);
     store_free(store);
     collector_free(collector);

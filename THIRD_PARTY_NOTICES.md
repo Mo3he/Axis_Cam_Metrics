@@ -8,6 +8,16 @@ License; bundled upstream components retain their own licenses.
 - Project: <https://developer.axis.com/acap/>
 - Used at build time to compile and package the application.
 
+## Eclipse Paho MQTT C Client
+
+- Project: <https://github.com/eclipse-paho/paho.mqtt.c>
+- License: dual Eclipse Public License 2.0 / Eclipse Distribution License 1.0
+  (BSD 3-Clause). This project relies on the EDL 1.0 terms.
+- Linked statically. The version is pinned by `ARG PAHO_VERSION` in the
+  Dockerfile, which is the authoritative value.
+- Built with `PAHO_WITH_SSL=TRUE`; TLS uses the device's own OpenSSL 3 and CA
+  trust store rather than a bundled copy.
+
 ## uPlot
 
 - Project: <https://github.com/leeoniya/uPlot>
