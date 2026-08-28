@@ -252,6 +252,20 @@ Docker or Podman is required; the Axis ACAP Native SDK image does the build.
 ARCHES=aarch64 ./build.sh  # a single architecture
 ```
 
+## Tests
+
+```sh
+sh tests/run.sh                                   # unit tests, no device needed
+ACAP_PASSWORD=... sh tests/smoke.sh <device> <user>  # every endpoint on a device
+```
+
+The unit tests cover tier downsampling and the window-to-tier mapping, which
+are the places a bug produces plausible but wrong numbers instead of a crash.
+The smoke test asks for every metric in one series request and checks the array
+lengths line up, which is what catches truncation and encoding faults in the
+request path. It reads the password from the environment so it never lands in
+shell history.
+
 ### CI
 
 Every push builds both architectures and uploads the packages as workflow

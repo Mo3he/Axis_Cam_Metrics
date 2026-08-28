@@ -21,6 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Run unit tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libglib2.0-dev
+          sh tests/run.sh
+
       - name: Build aarch64 and armv7hf packages
         run: ./build.sh
 

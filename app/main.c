@@ -342,14 +342,24 @@ static void send_json(GOutputStream *out, gchar *json) {
 /* ---------------------------------------------------------- event stream */
 
 /* Connections held open for server-sent events. The listener is synchronous,
- * so these sockets are switched to non-blocking and a client that cannot keep
- * up simply misses events rather than stalling the sampler. */
+ * so these sockets are non-blocking: a client that cannot keep up misses
+ * frames rather than stalling the sampler. */
+typedef struct {
+    GSocketConnection *connection;
+    guint stalled; /* Consecutive frames the client had no room for. */
+} SseClient;
+
 static GList *sse_clients;
 
-static void sse_drop(GSocketConnection *connection) {
-    sse_clients = g_list_remove(sse_clients, connection);
-    g_io_stream_close(G_IO_STREAM(connection), NULL, NULL);
-    g_object_unref(connection);
+/* A reader that never drains its socket would otherwise sit here forever,
+ * since a full buffer looks the same as a slow client. */
+#define SSE_MAX_STALLED 30
+
+static void sse_drop(SseClient *client) {
+    sse_clients = g_list_remove(sse_clients, client);
+    g_io_stream_close(G_IO_STREAM(client->connection), NULL, NULL);
+    g_object_unref(client->connection);
+    g_free(client);
 }
 
 static void sse_add(GSocketConnection *connection) {
@@ -363,7 +373,10 @@ static void sse_add(GSocketConnection *connection) {
         return;
 
     g_socket_set_blocking(g_socket_connection_get_socket(connection), FALSE);
-    sse_clients = g_list_prepend(sse_clients, g_object_ref(connection));
+
+    SseClient *client = g_new0(SseClient, 1);
+    client->connection = g_object_ref(connection);
+    sse_clients = g_list_prepend(sse_clients, client);
 }
 
 static void sse_broadcast(void) {
@@ -377,13 +390,20 @@ static void sse_broadcast(void) {
 
     for (GList *node = sse_clients; node;) {
         GList *next = node->next;
-        GSocketConnection *connection = node->data;
-        GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(connection));
+        SseClient *client = node->data;
+        GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(client->connection));
         GError *error = NULL;
         gssize written = g_output_stream_write(out, frame, length, NULL, &error);
 
-        if (written < 0 && !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK))
-            sse_drop(connection);
+        if (written > 0) {
+            client->stalled = 0;
+        } else if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK)) {
+            if (++client->stalled >= SSE_MAX_STALLED)
+                sse_drop(client);
+        } else {
+            sse_drop(client);
+        }
+
         g_clear_error(&error);
         node = next;
     }
