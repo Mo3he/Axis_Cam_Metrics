@@ -1,0 +1,16 @@
+{
+  "app": "Metrics",
+  "friendlyName": "Metrics Dashboard",
+  "versionPolicy": "patch",
+  "upstream": {
+    "type": "none",
+    "note": "No upstream component. Releases are cut manually with workflow_dispatch."
+  },
+  "build": {
+    "command": "./build.sh",
+    "env": {}
+  },
+  "signing": {
+    "skip": []
+  }
+}

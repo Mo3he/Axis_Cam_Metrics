@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "2.0.0",
+  "acapPackageConf": {
+    "setup": {
+      "appName": "Metrics",
+      "friendlyName": "Metrics Dashboard",
+      "vendor": "moshe@mohome.net",
+      "vendorId": "70ee172dd9",
+      "vendorUrl": "https://github.com/Mo3he/Axis_Cam_Metrics",
+      "version": "0.1.0",
+      "architecture": "BUILDARCH",
+      "runMode": "respawn",
+      "compatibleOsVersions": [{ "min": "11.11", "max": "13" }]
+    },
+    "configuration": {
+      "settingPage": "index.html",
+      "reverseProxy": [
+        {
+          "apiPath": "api",
+          "target": "http://localhost:2207/",
+          "access": "admin"
+        },
+        {
+          "apiPath": "data",
+          "target": "http://localhost:2207/",
+          "access": "viewer"
+        }
+      ],
+      "paramConfig": [
+        { "name": "SampleInterval", "default": "1", "type": "int:min=1,max=10" }
+      ]
+    }
+  }
+}

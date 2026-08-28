@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Metrics Dashboard</title>
+    <link rel="stylesheet" href="vendor/uPlot.min.css" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="identity">
+        <h1 id="device-model">Metrics</h1>
+        <p id="device-detail">Loading device information</p>
+      </div>
+      <div class="controls">
+        <div class="ranges" id="ranges" role="group" aria-label="Time range"></div>
+        <span class="pill" id="status">connecting</span>
+      </div>
+    </header>
+
+    <p class="banner" id="banner" hidden></p>
+
+    <section class="cards" id="cards"></section>
+
+    <section class="charts" id="charts"></section>
+
+    <footer class="footer">
+      <span id="footer-text"></span>
+    </footer>
+
+    <script src="vendor/uPlot.iife.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,63 @@
+---
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build aarch64 and armv7hf packages
+        run: ./build.sh
+
+      - name: Verify packages
+        run: |
+          for package in releases/*.eap; do
+            echo "== $package =="
+            tar tzf "$package"
+          done
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Metrics-packages
+          path: releases/*.eap
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Metrics-packages
+          path: releases
+
+      # Unsigned packages are published first; replace the assets with the
+      # signed_*.eap files once the Axis signing service returns them.
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" releases/*.eap \
+            --title "Metrics Dashboard ${GITHUB_REF_NAME#v}" \
+            --generate-notes
