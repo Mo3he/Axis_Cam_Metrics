@@ -59,6 +59,7 @@ struct Persist {
 typedef struct {
     char mountpoint[256];
     guint64 total;
+    gboolean preferred;
 } Candidate;
 
 static gboolean fstype_is_volatile(const char *fstype) {
@@ -66,15 +67,22 @@ static gboolean fstype_is_volatile(const char *fstype) {
            strcmp(fstype, "devtmpfs") == 0 || strcmp(fstype, "vcrfs") == 0;
 }
 
-/* Picks the largest real filesystem that looks like edge storage. Areas are
- * mounted several times; any of them resolves to the same disk, so the first
- * match per device is enough. */
+/* Each area is mounted several times. On the devices tested every mount exposes
+ * the same subtree, so the paths are interchangeable, but "areas/<AREA>/root"
+ * is the documented area root and is what the rest of the portfolio uses, so it
+ * wins ties rather than leaving the choice to /proc/mounts ordering. */
+static gboolean is_area_root(const char *mountpoint) {
+    return g_str_has_prefix(mountpoint, "/var/spool/storage/areas/") &&
+           g_str_has_suffix(mountpoint, "/root");
+}
+
+/* Picks the largest real filesystem that looks like edge storage. */
 static gboolean find_storage(char *out, gsize out_len) {
     FILE *f = fopen("/proc/mounts", "re");
     if (!f)
         return FALSE;
 
-    Candidate best = {{0}, 0};
+    Candidate best = {{0}, 0, FALSE};
     char device[128], mountpoint[256], fstype[32], options[256];
 
     while (fscanf(f, "%127s %255s %31s %255s %*d %*d\n", device, mountpoint, fstype, options) == 4) {
@@ -92,8 +100,12 @@ static gboolean find_storage(char *out, gsize out_len) {
             continue;
 
         guint64 total = (guint64)st.f_blocks * st.f_frsize;
-        if (total > best.total) {
+        gboolean preferred = is_area_root(mountpoint);
+        gboolean better = total > best.total ||
+                          (total == best.total && preferred && !best.preferred);
+        if (better) {
             best.total = total;
+            best.preferred = preferred;
             g_strlcpy(best.mountpoint, mountpoint, sizeof(best.mountpoint));
         }
     }

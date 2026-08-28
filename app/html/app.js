@@ -322,18 +322,23 @@
         });
         if (hottest != null) html += card("Temperature", fmtTemp(hottest), hottestName);
 
-        /* Show the fullest real filesystem rather than guessing at a name. */
-        var worst = null;
-        var worstName = "";
+        /* Headline on the biggest filesystem, which is the SD card or recording
+         * disk. Picking the fullest instead would point at internal flash on a
+         * recorder, which is not the storage anyone means. Every filesystem is
+         * still charted below. */
+        var biggest = null;
+        var biggestName = "";
         Object.keys(v).forEach(function (id) {
-          if (/^fs\..+\.usage$/.test(id) && (worst == null || v[id] > worst)) {
-            worst = v[id];
-            worstName = id.split(".")[1];
+          var match = /^fs\.(.+)\.total$/.exec(id);
+          if (match && (biggest == null || v[id] > biggest)) {
+            biggest = v[id];
+            biggestName = match[1];
           }
         });
-        if (worst != null) {
-          html += card("Storage", fmtPercent(worst),
-            fmtBytes(v["fs." + worstName + ".free"]) + " free on " + worstName, severityFor(worst));
+        if (biggestName) {
+          var usage = v["fs." + biggestName + ".usage"];
+          html += card("Storage", fmtPercent(usage),
+            fmtBytes(v["fs." + biggestName + ".free"]) + " free on " + biggestName, severityFor(usage));
         }
 
         var rx = 0;
