@@ -81,6 +81,27 @@
     return Math.abs(v) >= 1000 ? Math.round(v).toLocaleString() : String(Math.round(v * 10) / 10);
   }
 
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  function pad(n) {
+    return n < 10 ? "0" + n : String(n);
+  }
+
+  /* uPlot's default time axis prints 12-hour labels and drops a second row
+   * carrying the date, which reads as a stray number under the plot. These
+   * labels key off the tick interval uPlot actually chose rather than the
+   * requested window: a 7 day view holding one hour of data wants clock times,
+   * not the same date repeated six times. Hovering gives the full timestamp,
+   * so the ticks stay short enough not to collide. */
+  function axisTimeLabels(splits, incr) {
+    return splits.map(function (seconds) {
+      var d = new Date(seconds * 1000);
+      if (incr >= 86400) return d.getDate() + " " + MONTHS[d.getMonth()];
+      var clock = pad(d.getHours()) + ":" + pad(d.getMinutes());
+      return incr < 60 ? clock + ":" + pad(d.getSeconds()) : clock;
+    });
+  }
+
   function fmtDuration(seconds) {
     if (seconds == null) return "-";
     var d = Math.floor(seconds / 86400);
@@ -257,7 +278,14 @@
       cursor: { drag: { x: true, y: false } },
       scales: { x: { time: true }, y: spec.max ? { range: [0, spec.max] } : {} },
       axes: [
-        { stroke: theme.axis, grid: { stroke: theme.grid }, ticks: { stroke: theme.grid } },
+        {
+          stroke: theme.axis,
+          grid: { stroke: theme.grid },
+          ticks: { stroke: theme.grid },
+          values: function (self, splits, axisIdx, foundSpace, foundIncr) {
+            return axisTimeLabels(splits, foundIncr);
+          }
+        },
         {
           /* Byte rates reach "1.32 MB/s", which clips at the default width. */
           size: 76,
@@ -269,7 +297,9 @@
           }
         }
       ],
-      series: [{}].concat(
+      /* uPlot formats the time series legend itself and ignores a function
+       * here, so it takes a date template. {HH} is 24-hour, {h} would be 12. */
+      series: [{ label: "Time", value: "{YYYY}-{MM}-{DD} {HH}:{mm}:{ss}" }].concat(
         spec.series.map(function (s, i) {
           return {
             label: s.label,
