@@ -120,6 +120,32 @@ body {
   font-size: 13px;
 }
 
+.alerts {
+  margin-bottom: 16px;
+}
+
+.alert {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  border: 1px solid var(--bad);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.alert .alert-name {
+  font-weight: 600;
+}
+
+.alert .alert-detail {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));

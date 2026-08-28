@@ -27,6 +27,14 @@ void mqtt_apply(Mqtt *mqtt, const MqttConfig *config);
 /* Called on every sample; publishes at the configured interval. */
 void mqtt_tick(Mqtt *mqtt);
 
+/* Retained per rule so a subscriber joining late still sees a firing alert. */
+void mqtt_publish_alert(Mqtt *mqtt,
+                        const char *rule_id,
+                        const char *name,
+                        const char *metric,
+                        double value,
+                        gboolean firing);
+
 const char *mqtt_state(const Mqtt *mqtt);
 
 #endif /* MQTT_H */

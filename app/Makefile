@@ -1,7 +1,7 @@
 PROG = Metrics
-SRCS = main.c metrics.c collect.c store.c api.c persist.c mqtt.c vapix.c
+SRCS = main.c metrics.c collect.c store.c api.c persist.c mqtt.c vapix.c alerts.c
 OBJS = $(SRCS:.c=.o)
-PKGS = axparameter glib-2.0 gio-2.0 libcurl
+PKGS = axparameter axevent glib-2.0 gio-2.0 libcurl
 
 CFLAGS += -Wall -Wextra -Werror $(shell pkg-config --cflags $(PKGS))
 LDFLAGS += -Wl,-z,noexecstack

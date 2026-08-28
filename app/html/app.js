@@ -511,6 +511,38 @@
     });
   }
 
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function refreshAlerts() {
+    return getJson("alerts")
+      .then(function (payload) {
+        var host = document.getElementById("alerts");
+        var firing = (payload.rules || []).filter(function (r) { return r.firing; });
+        if (!firing.length) {
+          host.hidden = true;
+          host.innerHTML = "";
+          return;
+        }
+        host.hidden = false;
+        host.innerHTML = firing
+          .map(function (r) {
+            var since = r.since ? new Date(r.since * 1000).toLocaleTimeString() : "";
+            return (
+              '<div class="alert"><span class="alert-name">' + escapeHtml(r.name) + "</span>" +
+              '<span class="alert-detail">' + escapeHtml(r.metric) + " is " + fmtCount(r.value) +
+              ", " + escapeHtml(r.op) + " " + fmtCount(r.threshold) +
+              (since ? " since " + since : "") + "</span></div>"
+            );
+          })
+          .join("");
+      })
+      .catch(function () {});
+  }
+
   /* ------------------------------------------------------------ lifecycle */
 
   function seriesIntervalMs() {
@@ -522,7 +554,10 @@
   function restartTimers() {
     if (currentTimer) clearInterval(currentTimer);
     if (seriesTimer) clearInterval(seriesTimer);
-    currentTimer = setInterval(refreshCurrent, 2000);
+    currentTimer = setInterval(function () {
+      refreshCurrent();
+      refreshAlerts();
+    }, 2000);
     seriesTimer = setInterval(refreshSeries, seriesIntervalMs());
   }
 
@@ -588,7 +623,7 @@
         updateBanner();
         setupSettings();
         restartTimers();
-        return Promise.all([refreshCurrent(), refreshSeries()]);
+        return Promise.all([refreshCurrent(), refreshSeries(), refreshAlerts()]);
       })
       .catch(function (error) {
         setStatus(error.message, "error");

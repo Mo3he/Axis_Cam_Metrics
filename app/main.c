@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "api.h"
+#include "alerts.h"
 #include "collect.h"
 #include "metrics.h"
 #include "mqtt.h"
@@ -70,6 +71,7 @@ static Collector *collector;
 static Store *store;
 static Persist *persist;
 static Mqtt *mqtt;
+static Alerts *alerts;
 static Api api;
 static float *sample_buffer;
 static guint sample_timer;
@@ -120,10 +122,18 @@ static void on_coarse_sample(const float *values, gint64 timestamp, gpointer use
     persist_append(persist, values, timestamp);
 }
 
+/* Alerts already reach the device event system; this mirrors them to MQTT so a
+ * broker-side consumer does not have to poll. */
+static void on_alert_changed(const AlertRule *rule, gboolean firing, gpointer user_data) {
+    (void)user_data;
+    mqtt_publish_alert(mqtt, rule->id, rule->name, rule->metric, rule->last_value, firing);
+}
+
 static gboolean on_sample_tick(gpointer user_data) {
     (void)user_data;
     collector_sample(collector, sample_buffer);
     store_push(store, sample_buffer, (gint64)time(NULL));
+    alerts_evaluate(alerts, sample_buffer);
     sse_broadcast();
     mqtt_tick(mqtt);
     g_strlcpy(api.mqtt_status, mqtt_state(mqtt), sizeof(api.mqtt_status));
@@ -410,6 +420,11 @@ static gboolean handle_request(GSocketConnection *connection,
         gchar *text = api_prometheus_text(&api);
         send_response(out, "200 OK", "text/plain; version=0.0.4; charset=utf-8", text);
         g_free(text);
+    } else if (is_get && route_is(path, "alerts")) {
+        send_json(out, alerts_json(alerts));
+    } else if (strcmp(method, "POST") == 0 && route_is(path, "rules")) {
+        alerts_apply(alerts, body);
+        send_json(out, alerts_json(alerts));
     } else if (is_get && route_is(path, "stream")) {
         sse_add(connection);
         return TRUE;
@@ -558,6 +573,8 @@ int main(void) {
     api_read_device_info(&api.device, parameter_handle);
 
     mqtt = mqtt_new(&api);
+    alerts = alerts_new(&api);
+    alerts_set_notify(alerts, on_alert_changed, NULL);
 
     syslog(LOG_INFO, "%s %s on %s (%s), %u metrics", APP_NAME, APP_VERSION,
            api.device.model[0] ? api.device.model : "unknown device", api.device.firmware, registry.count);
@@ -578,6 +595,7 @@ int main(void) {
     for (gsize i = 0; i < G_N_ELEMENTS(parameters); i++)
         g_free(parameters[i].value);
     g_free(sample_buffer);
+    alerts_free(alerts);
     mqtt_free(mqtt);
     persist_close(persist);
     store_free(store);

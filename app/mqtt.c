@@ -301,6 +301,27 @@ void mqtt_tick(Mqtt *mqtt) {
     g_free(json);
 }
 
+void mqtt_publish_alert(Mqtt *mqtt,
+                        const char *rule_id,
+                        const char *name,
+                        const char *metric,
+                        double value,
+                        gboolean firing) {
+    if (!mqtt || !mqtt->connected)
+        return;
+
+    char leaf[128];
+    char alert_topic[256];
+    g_snprintf(leaf, sizeof(leaf), "alert/%s", rule_id);
+    topic(mqtt, alert_topic, sizeof(alert_topic), leaf);
+
+    gchar *payload = g_strdup_printf(
+        "{\"rule\":\"%s\",\"name\":\"%s\",\"metric\":\"%s\",\"value\":%g,\"state\":\"%s\"}",
+        rule_id, name, metric, value, firing ? "firing" : "cleared");
+    publish(mqtt, alert_topic, payload, 1, 1, 0);
+    g_free(payload);
+}
+
 const char *mqtt_state(const Mqtt *mqtt) {
     if (!mqtt->config.enabled)
         return "disabled";

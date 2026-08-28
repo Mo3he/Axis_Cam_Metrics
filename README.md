@@ -171,6 +171,39 @@ dashboard shows a banner on the long ranges.
 Samples are remapped by metric id when loaded, so adding an interface or
 inserting an SD card does not invalidate the saved history.
 
+## Alerts
+
+Each rule watches one metric and fires once the condition has held for its
+duration, so a single noisy sample cannot raise an alarm. Firing and clearing
+are published three ways:
+
+- As **stateful Axis events** under `CameraApplicationPlatform/Metrics/<rule>`,
+  so they appear in the device's own action rules next to motion and tampering
+  and can trigger a recording or notification with no involvement from this app.
+- As a retained MQTT message on `<prefix>/alert/<rule>`.
+- To the system log.
+
+A default set is created on first run and kept in step with the code and the
+device: CPU usage, memory usage, temperature, and one rule per mounted
+filesystem. Rules for metrics a product does not report are skipped, and
+built-ins that no longer apply are dropped on upgrade. Built-ins can be disabled
+or retuned but not deleted, so a product's default cover cannot be lost by
+accident.
+
+| Endpoint | Purpose |
+|---|---|
+| `data/alerts` | Every rule with its current value and firing state |
+| `api/rules` | POST `action=save` or `action=delete` with the rule fields |
+
+```sh
+curl -k --anyauth -u user:password -X POST \
+  'https://<device>/local/Metrics/api/rules' \
+  --data-urlencode action=save --data-urlencode id=fan_stopped \
+  --data-urlencode 'name=Fan stopped' --data-urlencode metric=sensor.fan_rpm \
+  --data-urlencode op=below --data-urlencode threshold=100 \
+  --data-urlencode duration=60 --data-urlencode enabled=yes
+```
+
 ## Ports & security
 
 - The app opens no ports on the device's external interfaces.
