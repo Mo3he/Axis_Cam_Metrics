@@ -50,8 +50,11 @@ design, so charting it would be noise.
 
 | Package | AXIS OS | Architecture | Status |
 |---|---|---|---|
-| ACAP 4 | 11.11 - 13 | aarch64 | Supported |
-| ACAP 4 | 11.11 - 13 | armv7hf | Supported |
+| ACAP 4 | 12.10.68 - 13 | aarch64 | Supported |
+| ACAP 4 | 12.10.68 - 13 | armv7hf | Built, not yet tested on hardware |
+
+The minimum is set by the SDK the packages are built with, which is what the
+device enforces at install time.
 
 The app runs as the unprivileged `sdk` user. It does not require root access.
 Device model, serial and firmware are read from the parameter store rather than
