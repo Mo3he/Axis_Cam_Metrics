@@ -356,6 +356,124 @@
       });
   }
 
+  /* ------------------------------------------------------------- settings */
+
+  var CHECKBOXES = ["MqttEnabled", "MqttTls", "MqttDiscovery", "MqttDiscoveryAll"];
+  var passwordIsSet = false;
+
+  function settingsForm() {
+    return document.getElementById("settings-form");
+  }
+
+  function fillSettings(values) {
+    var form = settingsForm();
+    Object.keys(values).forEach(function (key) {
+      var field = form.elements[key];
+      if (!field) return;
+      if (CHECKBOXES.indexOf(key) >= 0) field.checked = values[key] === "yes";
+      else field.value = values[key];
+    });
+
+    passwordIsSet = values.MqttPasswordIsSet === "yes";
+    form.elements.MqttPassword.value = "";
+    form.elements.MqttPassword.placeholder = passwordIsSet ? "unchanged" : "not set";
+
+    var prefix = form.elements.MqttTopicPrefix;
+    if (!prefix.value && meta && meta.device && meta.device.serial)
+      prefix.placeholder = "axis/" + meta.device.serial + "/metrics";
+  }
+
+  function collectSettings() {
+    var form = settingsForm();
+    var body = new URLSearchParams();
+
+    Array.prototype.forEach.call(form.elements, function (field) {
+      if (!field.name) return;
+      if (CHECKBOXES.indexOf(field.name) >= 0) {
+        body.set(field.name, field.checked ? "yes" : "no");
+      } else if (field.name === "MqttPassword") {
+        /* Empty means "leave the stored password alone", since the API never
+         * returns it to prefill the field. */
+        if (field.value) body.set(field.name, field.value);
+      } else {
+        body.set(field.name, field.value);
+      }
+    });
+    return body;
+  }
+
+  function openSettings() {
+    var error = document.getElementById("settings-error");
+    error.hidden = true;
+
+    fetch("api/settings", { credentials: "same-origin" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("settings unavailable (" + r.status + ")");
+        return r.json();
+      })
+      .then(function (values) {
+        fillSettings(values);
+        document.getElementById("settings").showModal();
+      })
+      .catch(function (e) {
+        error.textContent = e.message;
+        error.hidden = false;
+        document.getElementById("settings").showModal();
+      });
+  }
+
+  function saveSettings() {
+    var error = document.getElementById("settings-error");
+    var button = document.getElementById("settings-save");
+    error.hidden = true;
+    button.disabled = true;
+
+    fetch("api/settings", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: collectSettings().toString()
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error("save failed (" + r.status + ")");
+        document.getElementById("settings").close();
+        return refreshHealth();
+      })
+      .catch(function (e) {
+        error.textContent = e.message;
+        error.hidden = false;
+      })
+      .finally(function () {
+        button.disabled = false;
+      });
+  }
+
+  function refreshHealth() {
+    return getJson("health")
+      .then(function (health) {
+        var pill = document.getElementById("mqtt-state");
+        pill.textContent = health.mqtt || "disabled";
+        pill.className = "pill" + (health.mqtt === "connected" ? " live" : health.mqtt === "error" ? " error" : "");
+      })
+      .catch(function () {});
+  }
+
+  /* Settings need admin, so the button only appears for users who have it. */
+  function setupSettings() {
+    var open = document.getElementById("settings-open");
+    fetch("api/settings", { credentials: "same-origin", method: "GET" }).then(function (r) {
+      if (!r.ok) return;
+      open.hidden = false;
+      open.addEventListener("click", openSettings);
+      document.getElementById("settings-cancel").addEventListener("click", function () {
+        document.getElementById("settings").close();
+      });
+      document.getElementById("settings-save").addEventListener("click", saveSettings);
+      refreshHealth();
+      setInterval(refreshHealth, 10000);
+    });
+  }
+
   /* ------------------------------------------------------------ lifecycle */
 
   function seriesIntervalMs() {
@@ -431,6 +549,7 @@
         buildChartSpecs().forEach(function (spec) { charts.push(createChart(spec)); });
         resizeCharts();
         updateBanner();
+        setupSettings();
         restartTimers();
         return Promise.all([refreshCurrent(), refreshSeries()]);
       })

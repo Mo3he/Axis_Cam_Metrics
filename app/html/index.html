@@ -16,8 +16,54 @@
       <div class="controls">
         <div class="ranges" id="ranges" role="group" aria-label="Time range"></div>
         <span class="pill" id="status">connecting</span>
+        <button type="button" class="ghost" id="settings-open" hidden>Settings</button>
       </div>
     </header>
+
+    <dialog id="settings" class="settings">
+      <form method="dialog" id="settings-form">
+        <h2>Settings</h2>
+
+        <fieldset>
+          <legend>Sampling</legend>
+          <label>
+            <span>Interval</span>
+            <input type="number" name="SampleInterval" min="1" max="10" step="1" />
+            <small>Seconds between samples. A slower interval lengthens the fine-grained window.</small>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>MQTT <span class="pill" id="mqtt-state">disabled</span></legend>
+          <label class="check">
+            <input type="checkbox" name="MqttEnabled" /><span>Publish to a broker</span>
+          </label>
+          <div class="grid">
+            <label><span>Host</span><input type="text" name="MqttHost" placeholder="broker.example.com" /></label>
+            <label><span>Port</span><input type="number" name="MqttPort" min="1" max="65535" /></label>
+            <label><span>Username</span><input type="text" name="MqttUsername" autocomplete="off" /></label>
+            <label><span>Password</span><input type="password" name="MqttPassword" autocomplete="new-password" /></label>
+            <label><span>Topic prefix</span><input type="text" name="MqttTopicPrefix" /></label>
+            <label><span>Publish every</span><input type="number" name="MqttInterval" min="1" max="3600" /></label>
+          </div>
+          <label class="check">
+            <input type="checkbox" name="MqttTls" /><span>Use TLS</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" name="MqttDiscovery" /><span>Home Assistant discovery</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" name="MqttDiscoveryAll" /><span>Discover every metric, not just the essentials</span>
+          </label>
+        </fieldset>
+
+        <p class="form-error" id="settings-error" hidden></p>
+        <menu>
+          <button type="button" class="ghost" id="settings-cancel">Cancel</button>
+          <button type="button" class="primary" id="settings-save">Save</button>
+        </menu>
+      </form>
+    </dialog>
 
     <p class="banner" id="banner" hidden></p>
 

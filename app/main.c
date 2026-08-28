@@ -125,6 +125,7 @@ static gboolean on_sample_tick(gpointer user_data) {
     store_push(store, sample_buffer, (gint64)time(NULL));
     sse_broadcast();
     mqtt_tick(mqtt);
+    g_strlcpy(api.mqtt_status, mqtt_state(mqtt), sizeof(api.mqtt_status));
     return G_SOURCE_CONTINUE;
 }
 
