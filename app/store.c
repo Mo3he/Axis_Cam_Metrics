@@ -11,9 +11,12 @@
 #include <string.h>
 #include <syslog.h>
 
-/* 30 minutes, 24 hours, 30 days at the tier intervals below. */
+/* 30 minutes, 12 hours and 30 days at the tier intervals below.
+ * The medium tier stops at 12 h on purpose: store_tier_for_window caps a chart
+ * at ~2000 points, so nothing ever reads more than ~8 h of 15 s samples and a
+ * 24 h buffer here would just be resident memory nobody queries. */
 static const guint TIER_INTERVAL[STORE_TIERS] = {1, 15, 300};
-static const guint TIER_CAPACITY[STORE_TIERS] = {1800, 5760, 8640};
+static const guint TIER_CAPACITY[STORE_TIERS] = {1800, 2880, 8640};
 static const guint TIER_MIN_CAPACITY[STORE_TIERS] = {300, 720, 576};
 
 /* Cap the history at a small share of RAM so a 256 MB camera stays healthy. */
