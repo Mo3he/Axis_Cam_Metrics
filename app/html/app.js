@@ -132,6 +132,10 @@
     return series;
   }
 
+  function byUnit(group, unit) {
+    return meta.metrics.filter(function (m) { return m.group === group && m.unit === unit; });
+  }
+
   function buildChartSpecs() {
     var specs = [];
 
@@ -158,10 +162,23 @@
     var swap = pick(["mem.swap_usage"], ["swap used"]);
     if (swap.length && hasId("mem.swap_total")) specs.push({ title: "Swap", unit: "%", max: 100, series: swap });
 
-    var temps = idsMatching(/^temp\./).map(function (m) {
-      return { id: m.id, label: m.id.replace("temp.", "").replace(/_/g, " ") };
+    /* Both the raw thermal zones and the named CGI sensors land in this group;
+     * driving off the unit keeps fan RPM and heater state out of it. */
+    var temps = byUnit("temperature", "C").map(function (m) {
+      return { id: m.id, label: m.id.replace(/^(temp|sensor)\./, "").replace(/_/g, " ") };
     });
     if (temps.length) specs.push({ title: "Temperature", unit: "C", series: temps });
+
+    if (hasId("sensor.fan_rpm"))
+      specs.push({ title: "Fan", unit: "rpm", series: [{ id: "sensor.fan_rpm", label: "speed" }] });
+
+    var poe = meta.metrics
+      .filter(function (m) { return /^poe\.port\d+\.power$/.test(m.id); })
+      .map(function (m) { return { id: m.id, label: "port " + m.id.match(/port(\d+)/)[1] }; });
+    if (poe.length) {
+      if (hasId("poe.total")) poe.push({ id: "poe.total", label: "total" });
+      specs.push({ title: "PoE power", unit: "W", series: poe });
+    }
 
     var throughput = byDevice("net", "rx_bps", ["rx_bps", "tx_bps"], ["in", "out"]);
     if (throughput.length) specs.push({ title: "Network throughput", unit: "B/s", series: throughput });
@@ -353,6 +370,21 @@
           fmtCount(v["load.5"]) + " / " + fmtCount(v["load.15"]) + " avg");
 
         html += card("Uptime", fmtDuration(v["sys.uptime"]), fmtCount(v["sys.processes"]) + " processes");
+
+        if (v["poe.total"] != null) {
+          html += card("PoE", fmtCount(v["poe.total"]) + " W",
+            "of " + fmtCount(v["poe.budget"]) + " W budget",
+            severityFor(v["poe.budget"] ? (100 * v["poe.total"]) / v["poe.budget"] : null));
+        }
+
+        /* Wear only moves over years, so it is a status readout rather than a
+         * chart. pre_eol 1 is normal; 2 and 3 mean the card is wearing out. */
+        if (v["flash.life_used"] != null) {
+          var eol = v["flash.pre_eol"];
+          html += card("Flash wear", fmtPercent(v["flash.life_used"]),
+            eol >= 3 ? "urgent replacement" : eol === 2 ? "nearing end of life" : "healthy",
+            eol >= 3 ? "bad" : eol === 2 ? "warn" : severityFor(v["flash.life_used"]));
+        }
 
         document.getElementById("cards").innerHTML = html;
       })
