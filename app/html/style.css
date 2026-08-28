@@ -191,6 +191,20 @@ body {
   font-size: 12px;
 }
 
+/* uPlot keys the legend with a hollow square, which reads poorly for line
+ * series. Collapsing the box to its top border reuses the inline colour uPlot
+ * already sets and draws a short line instead. */
+.u-legend .u-marker {
+  width: 16px;
+  height: 0;
+  border-top-width: 3px !important;
+  border-right-width: 0 !important;
+  border-bottom-width: 0 !important;
+  border-left-width: 0 !important;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
 button.ghost,
 button.primary {
   padding: 7px 14px;
