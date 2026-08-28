@@ -28,6 +28,7 @@
 #include "mqtt.h"
 #include "persist.h"
 #include "store.h"
+#include "vapix.h"
 
 #define APP_NAME           "Metrics"
 #define APP_VERSION        "0.1.0" /* acap:installed-version */
@@ -533,6 +534,7 @@ int main(void) {
     }
 
     metrics_registry_init(&registry);
+    vapix_init();
     collector = collector_new(&registry);
     sample_buffer = g_new0(float, registry.count);
 
@@ -581,6 +583,7 @@ int main(void) {
     store_free(store);
     collector_free(collector);
     metrics_registry_clear(&registry);
+    vapix_cleanup();
     ax_parameter_free(parameter_handle);
     g_main_loop_unref(main_loop);
     closelog();

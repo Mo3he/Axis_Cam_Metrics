@@ -8,6 +8,7 @@
  */
 
 #include "collect.h"
+#include "vapix.h"
 
 #include <dirent.h>
 #include <math.h>
@@ -20,6 +21,12 @@
 #define MAX_DISKS  24
 #define MAX_MOUNTS 16
 #define MAX_ZONES  16
+#define MAX_SENSORS 16
+#define MAX_POE_PORTS 16
+
+/* CGI-backed readings change slowly and cost a round trip, so they run on their
+ * own cadence and are held between fast samples. */
+#define SLOW_INTERVAL_S 30
 
 typedef struct {
     guint64 total;
@@ -51,6 +58,16 @@ typedef struct {
     guint idx;
 } Zone;
 
+typedef struct {
+    char name[48];
+    guint idx;
+} Sensor;
+
+typedef struct {
+    guint port;
+    guint idx_power, idx_allocated, idx_class, idx_connected;
+} PoePort;
+
 struct Collector {
     MetricRegistry *registry;
 
@@ -79,6 +96,22 @@ struct Collector {
     guint n_mounts;
     Zone zones[MAX_ZONES];
     guint n_zones;
+
+    Sensor sensors[MAX_SENSORS];
+    guint n_sensors;
+    guint idx_fan_rpm, idx_heater;
+
+    PoePort poe[MAX_POE_PORTS];
+    guint n_poe;
+    guint idx_poe_total, idx_poe_budget;
+
+    guint idx_flash_life, idx_flash_eol;
+    char flash_life_path[160], flash_eol_path[160];
+
+    /* Holds the last CGI-backed readings so every sample carries them. */
+    float *slow_cache;
+    gboolean *is_slow;
+    gint64 slow_deadline;
 
     gint64 prev_us;
 };
@@ -361,6 +394,218 @@ static void discover_mounts(Collector *c) {
     fclose(f);
 }
 
+/* ------------------------------------------------- slow, CGI-backed sources */
+
+/* temperaturecontrol.cgi reports key=value lines with product-specific sensor
+ * names (CPU, Optics, IR on a camera; Disk, CPU on a recorder) plus fan and
+ * heater state, none of which /sys exposes by name. */
+static void discover_sensors(Collector *c) {
+    gchar *body = vapix_get("temperaturecontrol.cgi");
+    if (!body)
+        return;
+
+    gchar **lines = g_strsplit(body, "\n", -1);
+    for (gchar **line = lines; *line && c->n_sensors < MAX_SENSORS; line++) {
+        guint index;
+        char name[48];
+        if (sscanf(*line, "Sensor.S%u.Name=%47s", &index, name) != 2)
+            continue;
+        g_strstrip(name);
+
+        char safe[48], id[METRIC_ID_MAX], label[METRIC_LABEL_MAX];
+        sanitize(name, safe, sizeof(safe));
+        g_snprintf(id, sizeof(id), "sensor.%s", safe);
+        g_snprintf(label, sizeof(label), "%s temperature", name);
+
+        Sensor *sensor = &c->sensors[c->n_sensors++];
+        g_snprintf(sensor->name, sizeof(sensor->name), "Sensor.S%u.Celsius", index);
+        sensor->idx = reg(c, id, label, "C", "temperature");
+    }
+
+    if (strstr(body, "Fan.F0."))
+        c->idx_fan_rpm = reg(c, "sensor.fan_rpm", "Fan speed", "rpm", "temperature");
+    if (strstr(body, "Heater.H0."))
+        c->idx_heater = reg(c, "sensor.heater", "Heater running", "", "temperature");
+
+    g_strfreev(lines);
+    g_free(body);
+}
+
+static void sample_sensors(Collector *c, float *values) {
+    if (!c->n_sensors && !c->idx_fan_rpm && !c->idx_heater)
+        return;
+    gchar *body = vapix_get("temperaturecontrol.cgi");
+    if (!body)
+        return;
+
+    for (guint i = 0; i < c->n_sensors; i++) {
+        const char *found = strstr(body, c->sensors[i].name);
+        if (found)
+            set(values, c->sensors[i].idx, g_ascii_strtod(found + strlen(c->sensors[i].name) + 1, NULL));
+    }
+
+    /* Reported as "Running[3691]" or "Stopped". */
+    const char *fan = strstr(body, "Fan.F0.Status=");
+    if (fan && c->idx_fan_rpm) {
+        const char *bracket = strchr(fan, '[');
+        set(values, c->idx_fan_rpm, bracket ? g_ascii_strtod(bracket + 1, NULL) : 0);
+    }
+    const char *heater = strstr(body, "Heater.H0.Status=");
+    if (heater && c->idx_heater)
+        set(values, c->idx_heater, g_str_has_prefix(heater + 17, "Running") ? 1 : 0);
+
+    g_free(body);
+}
+
+/* Recorders power their cameras, so per-port draw is the closest thing to a
+ * health signal for each connected camera. */
+static void discover_poe(Collector *c) {
+    gchar *body = vapix_get("nvr/poe/getportstatuses.cgi");
+    if (!body || !strstr(body, "<PortStatus>")) {
+        g_free(body);
+        return;
+    }
+
+    const char *cursor = body;
+    while ((cursor = strstr(cursor, "<Port>")) && c->n_poe < MAX_POE_PORTS) {
+        guint port = (guint)g_ascii_strtoull(cursor + 6, NULL, 10);
+        cursor += 6;
+
+        char id[METRIC_ID_MAX], label[METRIC_LABEL_MAX];
+        PoePort *entry = &c->poe[c->n_poe++];
+        entry->port = port;
+
+#define POE_METRIC(field, suffix, text, unit)                                    \
+    g_snprintf(id, sizeof(id), "poe.port%u." suffix, port);                      \
+    g_snprintf(label, sizeof(label), "PoE port %u " text, port);                 \
+    entry->field = reg(c, id, label, unit, "poe")
+
+        POE_METRIC(idx_power, "power", "power draw", "W");
+        POE_METRIC(idx_allocated, "allocated", "allocated power", "W");
+        POE_METRIC(idx_class, "class", "PoE class", "");
+        POE_METRIC(idx_connected, "connected", "device connected", "");
+#undef POE_METRIC
+    }
+
+    if (c->n_poe) {
+        c->idx_poe_total = reg(c, "poe.total", "PoE total draw", "W", "poe");
+        c->idx_poe_budget = reg(c, "poe.budget", "PoE budget", "W", "poe");
+    }
+    g_free(body);
+}
+
+/* Extracts the text of the first <tag> at or after cursor. */
+static double xml_value(const char *cursor, const char *tag) {
+    char open[32];
+    g_snprintf(open, sizeof(open), "<%s>", tag);
+    const char *found = strstr(cursor, open);
+    return found ? g_ascii_strtod(found + strlen(open), NULL) : NAN;
+}
+
+static void sample_poe(Collector *c, float *values) {
+    if (!c->n_poe)
+        return;
+    gchar *body = vapix_get("nvr/poe/getportstatuses.cgi");
+    if (!body)
+        return;
+
+    const char *cursor = body;
+    double total = 0;
+    for (guint i = 0; i < c->n_poe; i++) {
+        cursor = strstr(cursor, "<PortStatus>");
+        if (!cursor)
+            break;
+        const char *end = strstr(cursor, "</PortStatus>");
+        double power = xml_value(cursor, "PowerConsumption");
+        set(values, c->poe[i].idx_power, power);
+        set(values, c->poe[i].idx_allocated, xml_value(cursor, "AllocatedPower"));
+        set(values, c->poe[i].idx_class, xml_value(cursor, "PoeClass"));
+        set(values, c->poe[i].idx_connected, xml_value(cursor, "StatusCode") > 0 ? 1 : 0);
+        if (!isnan(power))
+            total += power;
+        cursor = end ? end + 1 : cursor + 1;
+    }
+    set(values, c->idx_poe_total, total);
+    g_free(body);
+
+    gchar *limit = vapix_get("nvr/poe/gettotalpowerlimit.cgi");
+    if (limit) {
+        set(values, c->idx_poe_budget, xml_value(limit, "Limit"));
+        g_free(limit);
+    }
+}
+
+/* eMMC and SD cards report wear as JEDEC life-time bands, which is the only
+ * early warning before a card starts failing. */
+static void discover_flash_wear(Collector *c) {
+    const char *bases[] = {"/sys/class/mmc_host", NULL};
+    for (int b = 0; bases[b]; b++) {
+        GDir *dir = g_dir_open(bases[b], 0, NULL);
+        if (!dir)
+            continue;
+        const char *host;
+        while ((host = g_dir_read_name(dir))) {
+            char pattern[192];
+            g_snprintf(pattern, sizeof(pattern), "%s/%s", bases[b], host);
+            GDir *inner = g_dir_open(pattern, 0, NULL);
+            if (!inner)
+                continue;
+            const char *card;
+            while ((card = g_dir_read_name(inner))) {
+                char life[192], eol[192];
+                g_snprintf(life, sizeof(life), "%s/%s/life_time", pattern, card);
+                g_snprintf(eol, sizeof(eol), "%s/%s/pre_eol_info", pattern, card);
+                if (!g_file_test(life, G_FILE_TEST_EXISTS))
+                    continue;
+                g_strlcpy(c->flash_life_path, life, sizeof(c->flash_life_path));
+                g_strlcpy(c->flash_eol_path, eol, sizeof(c->flash_eol_path));
+                c->idx_flash_life = reg(c, "flash.life_used", "Flash life used", "%", "storage");
+                c->idx_flash_eol = reg(c, "flash.pre_eol", "Flash pre-EOL state", "", "storage");
+                break;
+            }
+            g_dir_close(inner);
+            if (c->flash_life_path[0])
+                break;
+        }
+        g_dir_close(dir);
+    }
+}
+
+static void sample_flash_wear(Collector *c, float *values) {
+    if (!c->flash_life_path[0])
+        return;
+
+    char buf[64];
+    if (read_text(c->flash_life_path, buf, sizeof(buf))) {
+        /* Two hex bands, one per area; each step means another 10% consumed. */
+        guint a = 0, b = 0;
+        if (sscanf(buf, "%x %x", &a, &b) >= 1) {
+            guint worst = MAX(a, b);
+            if (worst > 0)
+                set(values, c->idx_flash_life, (double)(worst - 1) * 10.0);
+        }
+    }
+    if (read_text(c->flash_eol_path, buf, sizeof(buf)))
+        set(values, c->idx_flash_eol, (double)g_ascii_strtoull(buf, NULL, 16));
+}
+
+static void mark_slow(Collector *c) {
+    for (guint i = 0; i < c->n_sensors; i++)
+        c->is_slow[c->sensors[i].idx] = TRUE;
+    if (c->idx_fan_rpm) c->is_slow[c->idx_fan_rpm] = TRUE;
+    if (c->idx_heater) c->is_slow[c->idx_heater] = TRUE;
+    for (guint i = 0; i < c->n_poe; i++) {
+        c->is_slow[c->poe[i].idx_power] = TRUE;
+        c->is_slow[c->poe[i].idx_allocated] = TRUE;
+        c->is_slow[c->poe[i].idx_class] = TRUE;
+        c->is_slow[c->poe[i].idx_connected] = TRUE;
+    }
+    if (c->idx_poe_total) c->is_slow[c->idx_poe_total] = TRUE;
+    if (c->idx_poe_budget) c->is_slow[c->idx_poe_budget] = TRUE;
+    if (c->idx_flash_life) c->is_slow[c->idx_flash_life] = TRUE;
+    if (c->idx_flash_eol) c->is_slow[c->idx_flash_eol] = TRUE;
+}
+
 Collector *collector_new(MetricRegistry *registry) {
     Collector *c = g_new0(Collector, 1);
     c->registry = registry;
@@ -370,10 +615,22 @@ Collector *collector_new(MetricRegistry *registry) {
     discover_ifaces(c);
     discover_disks(c);
     discover_mounts(c);
+    discover_sensors(c);
+    discover_poe(c);
+    discover_flash_wear(c);
+
+    c->slow_cache = g_new(float, registry->count);
+    c->is_slow = g_new0(gboolean, registry->count);
+    for (guint i = 0; i < registry->count; i++)
+        c->slow_cache[i] = NAN;
+    mark_slow(c);
+
     return c;
 }
 
 void collector_free(Collector *collector) {
+    g_free(collector->slow_cache);
+    g_free(collector->is_slow);
     g_free(collector);
 }
 
@@ -668,6 +925,17 @@ void collector_sample(Collector *c, float *values) {
     sample_ifaces(c, values, seconds, first);
     sample_disks(c, values, seconds, first);
     sample_mounts(c, values);
+
+    if (now >= c->slow_deadline) {
+        c->slow_deadline = now + (gint64)SLOW_INTERVAL_S * G_USEC_PER_SEC;
+        sample_sensors(c, c->slow_cache);
+        sample_poe(c, c->slow_cache);
+        sample_flash_wear(c, c->slow_cache);
+    }
+    for (guint i = 0; i < c->registry->count; i++) {
+        if (c->is_slow[i])
+            values[i] = c->slow_cache[i];
+    }
 
     c->prev_us = now;
 }
