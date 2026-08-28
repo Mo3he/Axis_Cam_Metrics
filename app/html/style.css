@@ -4,25 +4,44 @@
   --panel: #ffffff;
   --border: #dcdfe4;
   --text: #16181d;
-  --muted: #6b7280;
-  --accent: #0b7285;
-  --warn: #b26b00;
+  --muted: #5c6470;
+  --accent: #0b6b7d;
+  --accent-text: #ffffff;
+  --grid: rgb(0 0 0 / 9%);
+  --warn: #9a5b00;
   --bad: #b42318;
-  --good: #187d4a;
+  --good: #14663c;
 }
 
+/* Kept in one place so "auto" and an explicit dark choice cannot drift apart. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14161a;
-    --panel: #1c1f25;
-    --border: #2c313a;
-    --text: #e6e8ec;
-    --muted: #9aa1ac;
-    --accent: #4dd0e1;
-    --warn: #e3a008;
-    --bad: #f97066;
-    --good: #47cd89;
+  :root:not([data-theme="light"]) {
+    --bg: #13151a;
+    --panel: #1d2027;
+    --border: #363d49;
+    --text: #eef0f4;
+    --muted: #aab2bd;
+    --accent: #4fc3d9;
+    --accent-text: #0a1016;
+    --grid: rgb(255 255 255 / 11%);
+    --warn: #f0b429;
+    --bad: #ff8a80;
+    --good: #5bd68f;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #13151a;
+  --panel: #1d2027;
+  --border: #363d49;
+  --text: #eef0f4;
+  --muted: #aab2bd;
+  --accent: #4fc3d9;
+  --accent-text: #0a1016;
+  --grid: rgb(255 255 255 / 11%);
+  --warn: #f0b429;
+  --bad: #ff8a80;
+  --good: #5bd68f;
 }
 
 * {
@@ -87,7 +106,7 @@ body {
 
 .ranges button[aria-pressed="true"] {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-text);
 }
 
 .pill {
@@ -207,6 +226,57 @@ body {
   font-weight: 600;
 }
 
+.metric-list {
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.metric-group summary {
+  padding: 7px 10px;
+  background: var(--bg);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  position: sticky;
+  top: 0;
+}
+
+.metric-row {
+  display: grid;
+  grid-template-columns: 1fr 70px 70px;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.metric-row:nth-child(odd) {
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+
+.metric-row code {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.metric-head {
+  display: grid;
+  grid-template-columns: 1fr 70px 70px;
+  gap: 6px;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metric-row input,
+.metric-group summary input {
+  justify-self: center;
+}
+
 .footer {
   margin-top: 20px;
   color: var(--muted);
@@ -245,7 +315,7 @@ button.primary {
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-text);
 }
 
 .settings {
@@ -318,7 +388,8 @@ button.primary {
 
 .settings input[type="text"],
 .settings input[type="password"],
-.settings input[type="number"] {
+.settings input[type="number"],
+.settings select {
   width: 100%;
   padding: 7px 9px;
   border: 1px solid var(--border);

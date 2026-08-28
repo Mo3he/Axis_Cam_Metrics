@@ -104,6 +104,8 @@ static void publish_discovery(Mqtt *mqtt) {
 
     for (guint i = 0; i < mqtt->api->registry->count; i++) {
         const MetricDef *def = &mqtt->api->registry->defs[i];
+        if (!selection_enabled(mqtt->api->selection, SELECT_TRANSMIT, def->id))
+            continue; /* Not transmitted, so an entity for it would never update. */
         if (!mqtt->config.discovery_all && !is_essential(def->id))
             continue;
 

@@ -148,6 +148,9 @@ gchar *api_meta_json(const Api *api) {
         append_kv(out, "label", def->label, TRUE);
         append_kv(out, "unit", def->unit, TRUE);
         append_kv(out, "group", def->group, TRUE);
+        g_string_append_printf(out, ",\"display\":%s,\"transmit\":%s",
+                               selection_enabled(api->selection, SELECT_DISPLAY, def->id) ? "true" : "false",
+                               selection_enabled(api->selection, SELECT_TRANSMIT, def->id) ? "true" : "false");
         g_string_append_c(out, '}');
     }
     g_string_append(out, "]}");
@@ -196,8 +199,22 @@ gchar *api_current_values_json(const Api *api) {
         return g_strdup("{}");
     }
 
-    GString *out = g_string_new(NULL);
-    append_values_object(api, out, values);
+    GString *out = g_string_new("{");
+    gboolean first = TRUE;
+    for (guint i = 0; i < api->registry->count; i++) {
+        const char *id = api->registry->defs[i].id;
+        if (isnan(values[i]) || !selection_enabled(api->selection, SELECT_TRANSMIT, id))
+            continue;
+        if (!first)
+            g_string_append_c(out, ',');
+        first = FALSE;
+        g_string_append_c(out, '"');
+        append_escaped(out, id);
+        g_string_append(out, "\":");
+        append_number(out, values[i]);
+    }
+    g_string_append_c(out, '}');
+
     g_free(values);
     return take(out);
 }

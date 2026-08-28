@@ -26,6 +26,30 @@
   var currentTimer = null;
   var seriesTimer = null;
 
+  /* ---------------------------------------------------------------- theme */
+
+  var THEME_KEY = "metrics.theme";
+
+  function applyTheme(theme) {
+    if (theme === "auto") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem(THEME_KEY, theme); } catch (e) { /* private mode */ }
+  }
+
+  function currentTheme() {
+    try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; }
+  }
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  /* uPlot paints the axes on a canvas, so it cannot inherit the CSS colours and
+   * would otherwise draw near-black text on a dark panel. */
+  function chartTheme() {
+    return { axis: cssVar("--muted"), grid: cssVar("--grid") };
+  }
+
   /* ---------------------------------------------------------- formatting */
 
   function fmtPercent(v) {
@@ -100,11 +124,17 @@
   /* ------------------------------------------------------- chart building */
 
   function idsMatching(pattern) {
-    return meta.metrics.filter(function (m) { return pattern.test(m.id); });
+    return displayable().filter(function (m) { return pattern.test(m.id); });
   }
 
   function hasId(id) {
-    return meta.metrics.some(function (m) { return m.id === id; });
+    return displayable().some(function (m) { return m.id === id; });
+  }
+
+  /* Metrics the user switched off are still collected and exported; they are
+   * simply not charted. */
+  function displayable() {
+    return meta.metrics.filter(function (m) { return m.display !== false; });
   }
 
   function pick(ids, labels) {
@@ -133,7 +163,7 @@
   }
 
   function byUnit(group, unit) {
-    return meta.metrics.filter(function (m) { return m.group === group && m.unit === unit; });
+    return displayable().filter(function (m) { return m.group === group && m.unit === unit; });
   }
 
   function buildChartSpecs() {
@@ -172,7 +202,7 @@
     if (hasId("sensor.fan_rpm"))
       specs.push({ title: "Fan", unit: "rpm", series: [{ id: "sensor.fan_rpm", label: "speed" }] });
 
-    var poe = meta.metrics
+    var poe = displayable()
       .filter(function (m) { return /^poe\.port\d+\.power$/.test(m.id); })
       .map(function (m) { return { id: m.id, label: "port " + m.id.match(/port(\d+)/)[1] }; });
     if (poe.length) {
@@ -220,15 +250,20 @@
     document.getElementById("charts").appendChild(container);
 
     var format = formatterFor(spec.unit);
+    var theme = chartTheme();
     var options = {
       width: plotHost.clientWidth || 400,
       height: CHART_HEIGHT,
       cursor: { drag: { x: true, y: false } },
       scales: { x: { time: true }, y: spec.max ? { range: [0, spec.max] } : {} },
       axes: [
-        {},
+        { stroke: theme.axis, grid: { stroke: theme.grid }, ticks: { stroke: theme.grid } },
         {
-          size: 62,
+          /* Byte rates reach "1.32 MB/s", which clips at the default width. */
+          size: 76,
+          stroke: theme.axis,
+          grid: { stroke: theme.grid },
+          ticks: { stroke: theme.grid },
           values: function (self, ticks) {
             return ticks.map(function (v) { return format(v); });
           }
@@ -264,6 +299,16 @@
 
   function resizeCharts() {
     charts.forEach(resizeChart);
+  }
+
+  /* Axis colours are baked in at construction, so a theme change rebuilds. */
+  function rebuildCharts() {
+    charts.forEach(function (chart) { chart.plot.destroy(); });
+    charts = [];
+    document.getElementById("charts").innerHTML = "";
+    buildChartSpecs().forEach(function (spec) { charts.push(createChart(spec)); });
+    resizeCharts();
+    refreshSeries();
   }
 
   /* ------------------------------------------------------------- updating */
@@ -393,6 +438,69 @@
       });
   }
 
+  /* --------------------------------------------------- metric selection UI */
+
+  function buildMetricList() {
+    var host = document.getElementById("metric-list");
+    var groups = {};
+    meta.metrics.forEach(function (m) { (groups[m.group] = groups[m.group] || []).push(m); });
+
+    host.innerHTML = Object.keys(groups)
+      .sort()
+      .map(function (group) {
+        var rows = groups[group]
+          .map(function (m) {
+            return (
+              '<div class="metric-row"><span>' + escapeHtml(m.label) +
+              "<br /><code>" + escapeHtml(m.id) + "</code></span>" +
+              '<input type="checkbox" data-scope="display" data-id="' + escapeHtml(m.id) + '"' +
+              (m.display !== false ? " checked" : "") + ' aria-label="Display ' + escapeHtml(m.id) + '" />' +
+              '<input type="checkbox" data-scope="transmit" data-id="' + escapeHtml(m.id) + '"' +
+              (m.transmit !== false ? " checked" : "") + ' aria-label="Transmit ' + escapeHtml(m.id) + '" />' +
+              "</div>"
+            );
+          })
+          .join("");
+        return (
+          '<details class="metric-group"><summary>' + escapeHtml(group) +
+          " (" + groups[group].length + ")" +
+          ' <button type="button" class="ghost" data-toggle-group="' + escapeHtml(group) +
+          '" data-scope="display">display all/none</button>' +
+          ' <button type="button" class="ghost" data-toggle-group="' + escapeHtml(group) +
+          '" data-scope="transmit">transmit all/none</button>' +
+          "</summary>" + rows + "</details>"
+        );
+      })
+      .join("");
+
+    host.querySelectorAll("[data-toggle-group]").forEach(function (button) {
+      button.addEventListener("click", function (event) {
+        event.preventDefault();
+        var scope = button.dataset.scope;
+        var boxes = button.closest("details").querySelectorAll('input[data-scope="' + scope + '"]');
+        var allOn = Array.prototype.every.call(boxes, function (b) { return b.checked; });
+        boxes.forEach(function (b) { b.checked = !allOn; });
+      });
+    });
+  }
+
+  function saveMetricSelection() {
+    var host = document.getElementById("metric-list");
+    return Promise.all(
+      ["display", "transmit"].map(function (scope) {
+        var disabled = Array.prototype.filter
+          .call(host.querySelectorAll('input[data-scope="' + scope + '"]'), function (b) { return !b.checked; })
+          .map(function (b) { return b.dataset.id; });
+        return fetch("api/metrics", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ scope: scope, disabled: disabled.join(",") }).toString()
+        });
+      })
+    );
+  }
+
   /* ------------------------------------------------------------- settings */
 
   var CHECKBOXES = ["MqttEnabled", "MqttTls", "MqttDiscovery", "MqttDiscoveryAll"];
@@ -450,6 +558,8 @@
       })
       .then(function (values) {
         fillSettings(values);
+        buildMetricList();
+        document.getElementById("theme-select").value = currentTheme();
         document.getElementById("settings").showModal();
       })
       .catch(function (e) {
@@ -473,7 +583,15 @@
     })
       .then(function (r) {
         if (!r.ok) throw new Error("save failed (" + r.status + ")");
+        return saveMetricSelection();
+      })
+      .then(function () {
         document.getElementById("settings").close();
+        return getJson("meta");
+      })
+      .then(function (fresh) {
+        meta = fresh;
+        rebuildCharts();
         return refreshHealth();
       })
       .catch(function (e) {
@@ -506,6 +624,10 @@
         document.getElementById("settings").close();
       });
       document.getElementById("settings-save").addEventListener("click", saveSettings);
+      document.getElementById("theme-select").addEventListener("change", function (event) {
+        applyTheme(event.target.value);
+        rebuildCharts();
+      });
       refreshHealth();
       setInterval(refreshHealth, 10000);
     });
@@ -631,5 +753,6 @@
   }
 
   window.addEventListener("resize", resizeCharts);
+  applyTheme(currentTheme());
   start();
 })();

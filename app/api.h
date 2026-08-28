@@ -3,6 +3,7 @@
 
 #include "collect.h"
 #include "metrics.h"
+#include "selection.h"
 #include "store.h"
 
 typedef struct {
@@ -19,6 +20,7 @@ typedef struct {
 typedef struct {
     MetricRegistry *registry;
     Store *store;
+    Selection *selection;
     DeviceInfo device;
     const char *app_version;
     const char *persist_path; /* NULL when history is memory-only. */

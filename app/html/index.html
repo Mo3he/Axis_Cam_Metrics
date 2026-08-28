@@ -25,6 +25,28 @@
         <h2>Settings</h2>
 
         <fieldset>
+          <legend>Appearance</legend>
+          <label>
+            <span>Theme</span>
+            <select id="theme-select">
+              <option value="auto">Match system</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Metrics</legend>
+          <small>
+            Display controls what the dashboard charts. Transmit controls what leaves the device
+            over MQTT. Everything is collected and available on the API either way.
+          </small>
+          <div class="metric-head"><span>Metric</span><span>Display</span><span>Transmit</span></div>
+          <div class="metric-list" id="metric-list"></div>
+        </fieldset>
+
+        <fieldset>
           <legend>Sampling</legend>
           <label>
             <span>Interval</span>

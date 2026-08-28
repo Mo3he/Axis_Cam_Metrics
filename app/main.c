@@ -28,6 +28,7 @@
 #include "metrics.h"
 #include "mqtt.h"
 #include "persist.h"
+#include "selection.h"
 #include "store.h"
 #include "vapix.h"
 
@@ -425,6 +426,17 @@ static gboolean handle_request(GSocketConnection *connection,
     } else if (strcmp(method, "POST") == 0 && route_is(path, "rules")) {
         alerts_apply(alerts, body);
         send_json(out, alerts_json(alerts));
+    } else if (strcmp(method, "POST") == 0 && route_is(path, "metrics")) {
+        gchar *scope = api_query_param(body, "scope");
+        gchar *disabled = api_query_param(body, "disabled");
+        if (scope && disabled) {
+            selection_set_disabled(api.selection,
+                                   g_strcmp0(scope, "transmit") == 0 ? SELECT_TRANSMIT : SELECT_DISPLAY,
+                                   disabled);
+        }
+        g_free(scope);
+        g_free(disabled);
+        send_response(out, "200 OK", "application/json", "{\"status\":\"ok\"}");
     } else if (is_get && route_is(path, "stream")) {
         sse_add(connection);
         return TRUE;
@@ -567,6 +579,7 @@ int main(void) {
 
     api.registry = &registry;
     api.store = store;
+    api.selection = selection_new();
     api.persist_path = persist_path(persist);
     api.app_version = APP_VERSION;
     api.started = (gint64)time(NULL);
@@ -597,6 +610,7 @@ int main(void) {
     g_free(sample_buffer);
     alerts_free(alerts);
     mqtt_free(mqtt);
+    selection_free(api.selection);
     persist_close(persist);
     store_free(store);
     collector_free(collector);

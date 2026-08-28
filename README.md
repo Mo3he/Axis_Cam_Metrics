@@ -171,6 +171,35 @@ dashboard shows a banner on the long ranges.
 Samples are remapped by metric id when loaded, so adding an interface or
 inserting an SD card does not invalidate the saved history.
 
+## Choosing metrics
+
+Two independent switches per metric, both on the settings page:
+
+- **Display** decides what the dashboard charts.
+- **Transmit** decides what leaves the device over MQTT, including which Home
+  Assistant entities are created.
+
+They are deliberately separate: a recorder with eight cameras can chart a
+readable handful locally while publishing only what a broker needs, or collect
+everything for Prometheus while keeping the page uncluttered.
+
+Nothing is ever stopped from being collected. Every metric stays in `current`,
+`series` and the Prometheus endpoint regardless, so a scraper is unaffected by a
+display choice. The selection stores the *disabled* ids, so a metric that
+appears after a firmware or app upgrade is on by default rather than silently
+missing.
+
+| Endpoint | Purpose |
+|---|---|
+| `api/metrics` | POST `scope=display\|transmit` and `disabled=<id,id,...>` |
+
+## Appearance
+
+The dashboard follows the system light or dark preference by default, and the
+theme can be pinned to light or dark from the settings page. The choice is
+stored per browser, not on the device, so it does not change what other
+operators see.
+
 ## Alerts
 
 Each rule watches one metric and fires once the condition has held for its
