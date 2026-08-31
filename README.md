@@ -17,19 +17,26 @@ Real-time device metrics dashboard for AXIS cameras and recorders, with REST, Pr
 
 A self-contained metrics dashboard that runs on the device it monitors. It
 samples the kernel directly (`/proc`, `/sys`) once a second, keeps a tiered
-in-memory history, and serves both a chart UI and a read-only JSON API through
-the device's own authenticated reverse proxy.
+history, and serves both a chart UI and a read-only JSON API through the
+device's own authenticated reverse proxy.
 
 - **Discovers what the device has.** CPU cores, thermal zones, network
   interfaces, block devices and mounted filesystems are enumerated at startup,
   so the same package renders correctly on a camera with an SD card and image
   sensor thermals and on a recorder with a SATA disk and eight PoE port VLANs.
+  A few readings with no kernel equivalent, such as named temperature sensors,
+  fan speed and per-port PoE, come from VAPIX using a service account the device
+  issues over D-Bus, so no credentials are stored.
 - **Charts over 5m, 15m, 30m, 1h, 6h, 24h, 7d and 30d**, backed by three ring
-  buffers (1s, 15s and 5min resolution) that are sized against the device's RAM.
+  buffers (1s, 15s and 5min resolution) that are sized against the device's RAM
+  and written to an SD card or disk so they survive a reboot.
 - **No extra ports.** Everything is served on loopback and exposed only through
   the reverse proxy, so it inherits the device's authentication.
-- **Exports to whatever you already run:** JSON, server-sent events and a
-  Prometheus endpoint.
+- **Alerts on any metric**, raised as device events so they can drive the
+  camera's own action rules, and mirrored to MQTT.
+- **Exports to whatever you already run:** JSON, server-sent events, a
+  Prometheus endpoint, MQTT with Home Assistant discovery, and InfluxDB 1.x
+  or 2.x.
 
 ### Collected metrics
 
@@ -37,11 +44,15 @@ the device's own authenticated reverse proxy.
 |---|---|
 | CPU | total and per-core usage, user/system/iowait/irq/steal split, per-core frequency |
 | Memory | used, free, available, buffers, cached, swap |
-| Temperature | every thermal zone the device exposes |
+| Temperature | every thermal zone, plus named sensors such as Optics, ImageSensor, IR, heater and fan speed where the product reports them |
 | Network | per-interface throughput, packet rate, errors, drops, link speed, link state |
 | Disk | per-device read/write throughput, IOPS and utilisation |
-| Storage | per-filesystem total, used, free and usage percent |
+| Storage | per-filesystem total, used, free and usage percent, plus SD card wear and pre-EOL state |
+| PoE | per-port power, allocation, class and connection state, with totals against the budget |
 | System | load average, uptime, process counts, context switches, socket counts |
+
+A device with no PoE ports or no SD card simply reports neither group; the
+panels are built from what was found.
 
 Read-only filesystems are skipped: the Axis root filesystem sits at 100% by
 design, so charting it would be noise.
@@ -89,6 +100,19 @@ Settings are stored in the device's parameter store and are available from
 | `MqttInterval` | `30` | Seconds between state publishes. |
 | `MqttDiscovery` | `yes` | Publish Home Assistant discovery configs. |
 | `MqttDiscoveryAll` | `no` | Publish a config for every metric instead of a curated subset. |
+| `InfluxEnabled` | `no` | Write metrics to InfluxDB. |
+| `InfluxVersion` | `v2` | `v1` for 1.x, `v2` for 2.x. Selects the endpoint and the authentication. |
+| `InfluxUrl` | empty | Server URL, for example `http://influx.example.com:8086`. |
+| `InfluxDatabase` | empty | Bucket on 2.x, database on 1.x. |
+| `InfluxOrg` | empty | Organisation. 2.x only. |
+| `InfluxToken` | empty | API token. 2.x only. Stored write-only. |
+| `InfluxUsername` | empty | Username. 1.x only, optional. |
+| `InfluxPassword` | empty | Password. 1.x only. Stored write-only. |
+| `InfluxMeasurement` | `axis_metrics` | Measurement name to write into. |
+| `InfluxInterval` | `30` | Seconds between writes. |
+
+Alert rules, the metrics to display and transmit, and the theme are all set from
+the dashboard rather than the parameter store.
 
 ## MQTT
 
@@ -353,8 +377,11 @@ shell history.
 
 ### CI
 
-Every push builds both architectures and uploads the packages as workflow
-artifacts. Pushing a `v*` tag creates a release with the packages attached.
+Every push builds both architectures and runs the unit tests. Releases are cut
+with a `workflow_dispatch` on `build.yml`, which produces a **draft** release
+with the packages attached. The packages are then signed by Axis and the draft
+is published with the signed EAPs in place of the unsigned ones, which is why
+the release assets are named `signed_*.eap`.
 
 ## Links
 
