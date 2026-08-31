@@ -21,7 +21,7 @@
       "vendor": "moshe@mohome.net",
       "vendorId": "70ee172dd9",
       "vendorUrl": "https://github.com/Mo3he/Axis_Cam_Metrics",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "architecture": "BUILDARCH",
       "runMode": "respawn",
       "compatibleOsVersions": [
