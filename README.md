@@ -9,7 +9,7 @@
 
 Real-time device metrics dashboard for AXIS cameras and recorders, with REST, Prometheus and MQTT export
 
-<img width="1944" height="1281" alt="Screenshot 2026-08-31 at 10 27 33" src="https://github.com/user-attachments/assets/5b978250-0965-479f-aa55-c434be6d8063" />   
+<img width="1944" height="1281" alt="Screenshot 2026-08-31 at 10 27 33" src="https://github.com/user-attachments/assets/5b978250-0965-479f-aa55-c434be6d8063" />
 
 -----
 > **Disclaimer:** Independent, community-developed ACAP package. Not an official
