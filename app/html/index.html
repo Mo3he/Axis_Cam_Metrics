@@ -47,6 +47,18 @@
         </fieldset>
 
         <fieldset>
+          <legend>Alert rules</legend>
+          <small>
+            A rule fires once its condition has held for the whole duration, which keeps a brief
+            spike from raising an alarm. Firing rules appear on the dashboard, raise a device event
+            and are published to MQTT. Built-in rules can be adjusted or switched off but not
+            deleted.
+          </small>
+          <div class="rule-list" id="rule-list"></div>
+          <button type="button" class="ghost" id="rule-add">Add rule</button>
+        </fieldset>
+
+        <fieldset>
           <legend>Sampling</legend>
           <label>
             <span>Interval</span>
@@ -79,6 +91,38 @@
           </label>
         </fieldset>
 
+        <fieldset>
+          <legend>InfluxDB <span class="pill" id="influx-state">disabled</span></legend>
+          <small>
+            Writes the transmitted metrics as line protocol. Everything goes into one measurement,
+            one field per metric, tagged with the device serial and model.
+          </small>
+          <label class="check">
+            <input type="checkbox" name="InfluxEnabled" /><span>Write to InfluxDB</span>
+          </label>
+          <div class="grid">
+            <label>
+              <span>Version</span>
+              <select name="InfluxVersion">
+                <option value="v2">2.x</option>
+                <option value="v1">1.x</option>
+              </select>
+            </label>
+            <label><span>Server URL</span><input type="text" name="InfluxUrl" placeholder="http://influx.example.com:8086" /></label>
+            <label><span id="influx-database-label">Bucket</span><input type="text" name="InfluxDatabase" /></label>
+            <label><span>Publish every</span><input type="number" name="InfluxInterval" min="1" max="3600" /></label>
+            <label><span>Measurement</span><input type="text" name="InfluxMeasurement" /></label>
+          </div>
+          <div class="grid" id="influx-v2-fields">
+            <label><span>Organisation</span><input type="text" name="InfluxOrg" /></label>
+            <label><span>API token</span><input type="password" name="InfluxToken" autocomplete="new-password" /></label>
+          </div>
+          <div class="grid" id="influx-v1-fields">
+            <label><span>Username</span><input type="text" name="InfluxUsername" autocomplete="off" /></label>
+            <label><span>Password</span><input type="password" name="InfluxPassword" autocomplete="new-password" /></label>
+          </div>
+        </fieldset>
+
         <p class="form-error" id="settings-error" hidden></p>
         <menu>
           <button type="button" class="ghost" id="settings-cancel">Cancel</button>
@@ -89,11 +133,26 @@
 
     <p class="banner" id="banner" hidden></p>
 
+    <datalist id="metric-options"></datalist>
+
     <section class="alerts" id="alerts" hidden></section>
 
     <section class="cards" id="cards"></section>
 
     <section class="charts" id="charts"></section>
+
+    <section class="panel" id="procs-panel" hidden>
+      <div class="panel-head">
+        <h2>Top processes</h2>
+        <span class="panel-note" id="procs-note"></span>
+      </div>
+      <table class="procs">
+        <thead>
+          <tr><th>Process</th><th>PID</th><th class="num">CPU</th><th class="num">Memory</th></tr>
+        </thead>
+        <tbody id="procs-body"></tbody>
+      </table>
+    </section>
 
     <footer class="footer">
       <span id="footer-text"></span>

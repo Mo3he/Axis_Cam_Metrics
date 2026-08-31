@@ -25,6 +25,7 @@
   var window_s = 1800;
   var currentTimer = null;
   var seriesTimer = null;
+  var procsTimer = null;
 
   /* ---------------------------------------------------------------- theme */
 
@@ -588,9 +589,11 @@
       })
       .then(function (values) {
         fillSettings(values);
+        applyInfluxVersion();
         buildMetricList();
         document.getElementById("theme-select").value = currentTheme();
         document.getElementById("settings").showModal();
+        return buildRuleList();
       })
       .catch(function (e) {
         error.textContent = e.message;
@@ -615,6 +618,7 @@
         if (!r.ok) throw new Error("save failed (" + r.status + ")");
         return saveMetricSelection();
       })
+      .then(saveRules)
       .then(function () {
         document.getElementById("settings").close();
         return getJson("meta");
@@ -636,11 +640,28 @@
   function refreshHealth() {
     return getJson("health")
       .then(function (health) {
-        var pill = document.getElementById("mqtt-state");
-        pill.textContent = health.mqtt || "disabled";
-        pill.className = "pill" + (health.mqtt === "connected" ? " live" : health.mqtt === "error" ? " error" : "");
+        statePill("mqtt-state", health.mqtt);
+        statePill("influx-state", health.influx);
       })
       .catch(function () {});
+  }
+
+  function statePill(id, state) {
+    var pill = document.getElementById(id);
+    if (!pill) return;
+    pill.textContent = state || "disabled";
+    pill.className = "pill" + (state === "connected" ? " live" : state === "error" || state === "unauthorized" ? " error" : "");
+  }
+
+  /* 1.x authenticates with a username and password against a database, 2.x with
+   * a token against an organisation's bucket. Showing both at once invites
+   * filling in the pair that is ignored. */
+  function applyInfluxVersion() {
+    var form = settingsForm();
+    var v2 = form.elements.InfluxVersion.value !== "v1";
+    document.getElementById("influx-v2-fields").hidden = !v2;
+    document.getElementById("influx-v1-fields").hidden = v2;
+    document.getElementById("influx-database-label").textContent = v2 ? "Bucket" : "Database";
   }
 
   /* Settings need admin, so the button only appears for users who have it. */
@@ -654,6 +675,8 @@
         document.getElementById("settings").close();
       });
       document.getElementById("settings-save").addEventListener("click", saveSettings);
+      document.getElementById("rule-add").addEventListener("click", addRule);
+      settingsForm().elements.InfluxVersion.addEventListener("change", applyInfluxVersion);
       document.getElementById("theme-select").addEventListener("change", function (event) {
         applyTheme(event.target.value);
         rebuildCharts();
@@ -695,6 +718,133 @@
       .catch(function () {});
   }
 
+  /* ---------------------------------------------------------- rule editor */
+
+  var deletedRules = [];
+
+  function metricUnit(id) {
+    var found = meta.metrics.filter(function (m) { return m.id === id; })[0];
+    return found ? found.unit : "";
+  }
+
+  function ruleRow(rule) {
+    var row = document.createElement("div");
+    row.className = "rule";
+    row.dataset.id = rule.id;
+    row.dataset.builtin = rule.builtin ? "yes" : "no";
+    row.innerHTML =
+      '<input type="text" data-field="name" value="' + escapeHtml(rule.name) + '" aria-label="Rule name" />' +
+      '<input type="text" list="metric-options" data-field="metric" value="' + escapeHtml(rule.metric) +
+      '" aria-label="Metric"' + (rule.builtin ? " readonly" : "") + " />" +
+      '<select data-field="op" aria-label="Comparison">' +
+      '<option value="above"' + (rule.op === "above" ? " selected" : "") + ">rises above</option>" +
+      '<option value="below"' + (rule.op === "below" ? " selected" : "") + ">falls below</option>" +
+      "</select>" +
+      '<span class="rule-threshold"><input type="number" step="any" data-field="threshold" value="' +
+      rule.threshold + '" aria-label="Threshold" /><small data-unit>' +
+      escapeHtml(metricUnit(rule.metric)) + "</small></span>" +
+      '<span class="rule-threshold"><input type="number" min="0" max="86400" data-field="duration" value="' +
+      rule.duration + '" aria-label="Duration" /><small>s</small></span>' +
+      '<label class="check"><input type="checkbox" data-field="enabled"' +
+      (rule.enabled ? " checked" : "") + ' /><span>On</span></label>' +
+      '<button type="button" class="ghost" data-remove' + (rule.builtin ? " disabled" : "") +
+      ' title="' + (rule.builtin ? "Built-in rules cannot be deleted" : "Delete this rule") + '">&times;</button>';
+
+    row.querySelector('[data-field="metric"]').addEventListener("change", function (event) {
+      row.querySelector("[data-unit]").textContent = metricUnit(event.target.value);
+    });
+    row.querySelector("[data-remove]").addEventListener("click", function () {
+      deletedRules.push(rule.id);
+      row.remove();
+    });
+    return row;
+  }
+
+  function buildRuleList() {
+    deletedRules = [];
+    var options = document.getElementById("metric-options");
+    options.innerHTML = meta.metrics
+      .map(function (m) { return '<option value="' + escapeHtml(m.id) + '">' + escapeHtml(m.label) + "</option>"; })
+      .join("");
+
+    return getJson("alerts").then(function (payload) {
+      var host = document.getElementById("rule-list");
+      host.innerHTML = "";
+      (payload.rules || []).forEach(function (rule) { host.appendChild(ruleRow(rule)); });
+    });
+  }
+
+  function addRule() {
+    var id = "custom_" + Date.now().toString(36);
+    document.getElementById("rule-list").appendChild(
+      ruleRow({ id: id, name: "", metric: "", op: "above", threshold: 0, duration: 60, enabled: true, builtin: false })
+    );
+  }
+
+  function postRule(body) {
+    return fetch("api/rules", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    });
+  }
+
+  /* Posted one at a time: each request rewrites the whole rules file, so
+   * overlapping writes would race for it. */
+  function saveRules() {
+    var work = deletedRules.map(function (id) {
+      return function () { return postRule(new URLSearchParams({ action: "delete", id: id })); };
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll("#rule-list .rule"), function (row) {
+      var field = function (name) { return row.querySelector('[data-field="' + name + '"]'); };
+      if (!field("metric").value) return; /* A row the user added but never filled in. */
+
+      var body = new URLSearchParams({
+        action: "save",
+        id: row.dataset.id,
+        name: field("name").value || field("metric").value,
+        metric: field("metric").value,
+        op: field("op").value,
+        threshold: field("threshold").value || "0",
+        duration: field("duration").value || "0",
+        enabled: field("enabled").checked ? "yes" : "no"
+      });
+      work.push(function () { return postRule(body); });
+    });
+
+    return work.reduce(function (chain, step) { return chain.then(step); }, Promise.resolve());
+  }
+
+  /* -------------------------------------------------------- top processes */
+
+  function refreshProcesses() {
+    return getJson("processes?limit=12")
+      .then(function (payload) {
+        var panel = document.getElementById("procs-panel");
+        var rows = payload.processes || [];
+        if (!rows.length) {
+          panel.hidden = true;
+          return;
+        }
+        panel.hidden = false;
+        document.getElementById("procs-note").textContent =
+          payload.total + " running  \u00b7  share of all " + payload.cores +
+          " cores, averaged over " + payload.interval + "s";
+        document.getElementById("procs-body").innerHTML = rows
+          .map(function (p) {
+            return "<tr><td>" + escapeHtml(p.name) + "</td><td>" + p.pid +
+              '</td><td class="num">' + p.cpu.toFixed(1) + '%</td><td class="num">' +
+              fmtBytes(p.rss) + "</td></tr>";
+          })
+          .join("");
+      })
+      .catch(function () {
+        document.getElementById("procs-panel").hidden = true;
+      });
+  }
+
   /* ------------------------------------------------------------ lifecycle */
 
   function seriesIntervalMs() {
@@ -706,6 +856,7 @@
   function restartTimers() {
     if (currentTimer) clearInterval(currentTimer);
     if (seriesTimer) clearInterval(seriesTimer);
+    if (!procsTimer) procsTimer = setInterval(refreshProcesses, 10000);
     currentTimer = setInterval(function () {
       refreshCurrent();
       refreshAlerts();
@@ -775,7 +926,7 @@
         updateBanner();
         setupSettings();
         restartTimers();
-        return Promise.all([refreshCurrent(), refreshSeries(), refreshAlerts()]);
+        return Promise.all([refreshCurrent(), refreshSeries(), refreshAlerts(), refreshProcesses()]);
       })
       .catch(function (error) {
         setStatus(error.message, "error");

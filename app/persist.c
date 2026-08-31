@@ -1,10 +1,13 @@
 /*
- * Persistence for the coarse history tier.
+ * Persistence for the history tiers.
  *
- * The file is a fixed-size circular buffer, so a new sample costs one record
- * write plus a header write rather than rewriting the whole history. At one
- * sample per five minutes that is a few hundred bytes every five minutes,
- * which an SD card or disk absorbs without complaint.
+ * Each tier gets its own file, laid out as a fixed-size circular buffer, so a
+ * new sample costs one record write rather than rewriting the whole history.
+ *
+ * The index in the header is only flushed periodically. The finest tier writes
+ * a sample every second, and rewriting a 4 KB header each time would cost more
+ * than the sample itself; an unclean shutdown therefore loses the last few
+ * samples of a tier rather than its whole recording.
  *
  * It deliberately never lands on flash. /mnt/flash has ~144 MB free on a
  * recorder, and even this modest write rate is wear that belongs on removable
@@ -24,11 +27,11 @@
 #include <syslog.h>
 #include <unistd.h>
 
-#define PERSIST_MAGIC   "AXMETRIC"
-#define PERSIST_VERSION 1u
-#define HEADER_BYTES    4096u
-#define APP_SUBDIR      "Metrics"
-#define HISTORY_FILE    "history.bin"
+#define PERSIST_MAGIC       "AXMETRIC"
+#define PERSIST_VERSION     1u
+#define HEADER_BYTES        4096u
+#define APP_SUBDIR          "Metrics"
+#define HEADER_FLUSH_EVERY  60u
 
 typedef struct {
     char magic[8];
@@ -52,6 +55,7 @@ struct Persist {
     gsize records_offset;
     gsize record_bytes;
     float *record;
+    guint appends_since_header;
     /* Until persist_sync has laid the file out, head and count are still zero
      * and writing them would destroy the saved index. */
     gboolean owns_file;
@@ -159,9 +163,10 @@ static void write_header(Persist *persist) {
     header.head = persist->head;
     header.count = persist->count;
     write_at(persist->fd, &header, sizeof(header), 0);
+    persist->appends_since_header = 0;
 }
 
-Persist *persist_open(const MetricRegistry *registry, const StoreTier *tier) {
+Persist *persist_open(const MetricRegistry *registry, const StoreTier *tier, const char *filename) {
     static gboolean absence_logged;
 
     char base[256];
@@ -188,7 +193,7 @@ Persist *persist_open(const MetricRegistry *registry, const StoreTier *tier) {
     persist->record_bytes = sizeof(gint64) + (gsize)registry->count * sizeof(float);
     persist->records_offset = HEADER_BYTES + id_table_bytes(registry->count);
     persist->record = g_new0(float, registry->count);
-    g_snprintf(persist->path, sizeof(persist->path), "%s/%s", directory, HISTORY_FILE);
+    g_snprintf(persist->path, sizeof(persist->path), "%s/%s", directory, filename);
 
     persist->fd = open(persist->path, O_RDWR | O_CREAT | O_CLOEXEC, 0640);
     if (persist->fd < 0) {
@@ -344,7 +349,8 @@ void persist_append(Persist *persist, const float *values, gint64 timestamp) {
         persist->head = (persist->head + 1) % persist->capacity;
         if (persist->count < persist->capacity)
             persist->count++;
-        write_header(persist);
+        if (++persist->appends_since_header >= HEADER_FLUSH_EVERY)
+            write_header(persist);
     }
     g_free(record);
 }

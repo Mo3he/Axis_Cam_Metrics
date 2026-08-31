@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.1.1
+
+### Added
+
+- Alert rules are editable from the settings page: thresholds, durations,
+  comparison and enabled state, plus adding and deleting rules of your own.
+- InfluxDB push, in both the 1.x and 2.x dialects, chosen by a setting. One
+  measurement, one field per metric, tagged with the device serial and model.
+  The write runs on a worker thread so an unreachable database cannot stall
+  sampling.
+- A top processes panel and a `data/processes` endpoint, reporting each
+  process's CPU share of the whole device and its resident memory.
+- `health` now reports the InfluxDB connection state alongside MQTT.
+
+### Fixed
+
+- Every history tier is persisted, not just the 5-minute one, so the 5m, 15m,
+  30m, 1h and 6h ranges survive a restart instead of starting empty.
+- Storage that mounts after the app starts is now picked up. An ACAP usually
+  launches before the SD card or disk is ready at boot, which left history in
+  memory for the whole session; the app now retries every 30 seconds.
+- Filesystem metrics for late-mounting storage were missing for the whole
+  session, because the metric set was decided before the mount existed. On a
+  recorder that meant its own 3.6 TB disk had no usage metrics and no storage
+  alert rule. The metric set is now rediscovered when the mount table changes.
+- Closing the history file without loading it first wrote a header claiming
+  zero samples, discarding the recording.
+- Home Assistant showed raw bytes, so a 3.6 TB disk read as `3600000000000 B`.
+  Discovery now carries `suggested_unit_of_measurement`, so sizes display as GB
+  or MB and rates as MB/s while the published value stays in base units.
+
+### Changed
+
+- The history file header is flushed periodically rather than on every sample.
+  Rewriting 4 KB once a second would have cost more card wear than the samples.
+  An unclean shutdown now loses the last few samples of a tier rather than the
+  whole recording.
+
 ## 0.1.0
 
 First release.

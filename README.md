@@ -111,6 +111,38 @@ entities go unavailable when the device does. By default a curated subset is
 exposed (CPU, memory, load, uptime, temperatures, filesystem usage and network
 throughput); `MqttDiscoveryAll` publishes every metric instead.
 
+Values are always published in base units, so a size is bytes and a rate is
+bytes per second. A unit that changed with magnitude would break arithmetic and
+split a history graph at the crossover point. The discovery config carries
+`suggested_unit_of_measurement`, so Home Assistant displays GB for filesystems,
+MB for memory and MB/s for throughput while still storing the raw value.
+
+Home Assistant only applies a suggested unit when it first creates an entity.
+Sensors created by an earlier version keep showing bytes; change the unit in the
+entity's settings, or delete the device and let discovery recreate it.
+
+## InfluxDB
+
+The app can push to InfluxDB as well, in either dialect:
+
+| Version | Endpoint | Authentication |
+|---|---|---|
+| 2.x | `<url>/api/v2/write?org=&bucket=` | `Authorization: Token <token>` |
+| 1.x | `<url>/write?db=` | optional username and password |
+
+Everything lands in one measurement (`axis_metrics` by default), one field per
+metric id, tagged with the device serial and model. Only metrics enabled for
+transmit are sent.
+
+```text
+axis_metrics,device=B8A44F123456,model=AXIS\ P3288-LV cpu.usage=23.15,mem.used=525074400 1788163510
+```
+
+The write runs on a worker thread, because a broker or database that stops
+answering would otherwise block the sampler and with it the whole dashboard. The
+queue holds a single payload: metrics are a live view, so a stale sample is
+dropped in favour of the next one rather than building a backlog.
+
 The settings page reads and writes through the app's own endpoint at
 `/local/Metrics/api/settings`, served by the app itself and reachable only
 through the device's authenticated reverse proxy. Nothing depends on
@@ -127,9 +159,10 @@ least `viewer` access.
 | `meta` | Device identity, store layout, and every metric's id, label, unit and group |
 | `current` | The latest sample as an id to value map |
 | `series?window=<seconds>&metrics=<id,id,...>` | History for the named metrics, with a shared timestamp array |
+| `processes?limit=<n>` | Top processes by CPU, with pid, name, CPU share and resident memory |
 | `stream` | Server-sent events, one `data:` frame per sample |
 | `prometheus` | Prometheus text exposition format |
-| `health` | Liveness, metric count, sample count and memory use |
+| `health` | Liveness, metric count, sample count, memory use and the MQTT and InfluxDB connection states |
 
 The tier is chosen from the requested window, so a 30 day request is answered
 from the 5-minute buffer rather than by returning millions of points.
@@ -162,14 +195,29 @@ cannot change any setting. Revoke it by deleting the account.
 
 ## History and persistence
 
-The 5-minute tier is written to a fixed-size circular file on the SD card or
-disk, so the 7 day and 30 day views survive a restart or reboot. One sample is
-appended every five minutes, which is a few hundred bytes: negligible wear.
+Every tier is written to its own fixed-size circular file on the SD card or
+disk, so all ranges from 5 minutes to 30 days survive a restart or reboot.
+
+| File | Interval | Span |
+|---|---|---|
+| `history-fine.bin` | sample interval, 1s by default | 30 minutes |
+| `history-medium.bin` | 15s | 12 hours |
+| `history.bin` | 5 minutes | 30 days |
+
+The index in each file header is flushed periodically rather than on every
+sample, because rewriting a 4 KB header once a second would cost far more wear
+than the sample itself. An unclean shutdown therefore loses the last few samples
+of a tier rather than its whole recording.
 
 It is deliberately never written to flash. A recorder has around 144 MB free on
 `/mnt/flash`, and that wear belongs on removable storage. If the device has no
 card or disk, history stays in memory, `meta` reports `persisted: false`, and the
 dashboard shows a banner on the long ranges.
+
+Storage is often not mounted yet when an ACAP starts at boot, so the app keeps
+looking for it every 30 seconds. If a filesystem appears after startup, the
+metric set is rediscovered as well, which is what gives a recorder's disk its
+usage metrics and its own storage alert rule.
 
 Samples are remapped by metric id when loaded, so adding an interface or
 inserting an SD card does not invalidate the saved history.
@@ -203,6 +251,16 @@ theme can be pinned to light or dark from the settings page. The choice is
 stored per browser, not on the device, so it does not change what other
 operators see.
 
+## Top processes
+
+The dashboard lists the busiest processes with their pid, CPU share and resident
+memory, refreshed every ten seconds. CPU is reported as a share of the whole
+device, matching `cpu.usage`, so a process cannot read 53% on a device the rest
+of the page calls 27% busy.
+
+A percentage only exists as a difference between two readings, so a process that
+has appeared since the last scan reports zero rather than a misleading spike.
+
 ## Alerts
 
 Each rule watches one metric and fires once the condition has held for its
@@ -221,6 +279,11 @@ filesystem. Rules for metrics a product does not report are skipped, and
 built-ins that no longer apply are dropped on upgrade. Built-ins can be disabled
 or retuned but not deleted, so a product's default cover cannot be lost by
 accident.
+
+The settings page edits all of this: thresholds, durations, comparison and
+enabled state, plus adding and deleting rules of your own against any metric the
+device reports. The threshold field shows the metric's unit so a byte rate is
+not mistaken for a percentage.
 
 | Endpoint | Purpose |
 |---|---|

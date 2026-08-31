@@ -25,9 +25,11 @@
 #include "api.h"
 #include "alerts.h"
 #include "collect.h"
+#include "influx.h"
 #include "metrics.h"
 #include "mqtt.h"
 #include "persist.h"
+#include "procs.h"
 #include "selection.h"
 #include "store.h"
 #include "vapix.h"
@@ -60,6 +62,16 @@ static Parameter parameters[] = {
     {"MqttInterval", "30", FALSE, NULL},
     {"MqttDiscovery", "yes", FALSE, NULL},
     {"MqttDiscoveryAll", "no", FALSE, NULL},
+    {"InfluxEnabled", "no", FALSE, NULL},
+    {"InfluxVersion", "v2", FALSE, NULL},
+    {"InfluxUrl", "", FALSE, NULL},
+    {"InfluxDatabase", "", FALSE, NULL},
+    {"InfluxOrg", "", FALSE, NULL},
+    {"InfluxToken", "", TRUE, NULL},
+    {"InfluxUsername", "", FALSE, NULL},
+    {"InfluxPassword", "", TRUE, NULL},
+    {"InfluxMeasurement", "axis_metrics", FALSE, NULL},
+    {"InfluxInterval", "30", FALSE, NULL},
 };
 
 static AXParameter *parameter_handle;
@@ -70,8 +82,10 @@ static void sse_broadcast(void);
 static MetricRegistry registry;
 static Collector *collector;
 static Store *store;
-static Persist *persist;
+static Persist *persists[STORE_TIERS];
 static Mqtt *mqtt;
+static Influx *influx;
+static Procs *procs;
 static Alerts *alerts;
 static Api api;
 static float *sample_buffer;
@@ -118,9 +132,8 @@ static void load_parameter(Parameter *parameter) {
 
 /* ----------------------------------------------------------------- sampler */
 
-static void on_coarse_sample(const float *values, gint64 timestamp, gpointer user_data) {
-    (void)user_data;
-    persist_append(persist, values, timestamp);
+static void on_tier_sample(const float *values, gint64 timestamp, gpointer user_data) {
+    persist_append(persists[GPOINTER_TO_UINT(user_data)], values, timestamp);
 }
 
 /* Alerts already reach the device event system; this mirrors them to MQTT so a
@@ -136,13 +149,30 @@ static void on_alert_changed(const AlertRule *rule, gboolean firing, gpointer us
  * card inserted later starts being used without a restart. */
 #define PERSIST_RETRY_S 30
 
+/* One file per tier. The coarse tier keeps the original name so an existing
+ * recording survives the upgrade that added the other two. */
+G_STATIC_ASSERT(STORE_TIERS == 3);
+static const char *PERSIST_FILES[STORE_TIERS] = {"history-fine.bin", "history-medium.bin",
+                                                "history.bin"};
+
 static guint persist_retry_timer;
 
 static void rebuild_for_new_storage(void);
 
+static void close_persistence(void) {
+    for (guint i = 0; i < STORE_TIERS; i++) {
+        if (!persists[i])
+            continue;
+        store_set_tier_callback(store, i, NULL, NULL);
+        persist_close(persists[i]);
+        persists[i] = NULL;
+    }
+    api.persist_path = NULL;
+}
+
 static gboolean try_open_persistence(gpointer user_data) {
     (void)user_data;
-    if (persist)
+    if (persists[STORE_TIERS - 1])
         return G_SOURCE_REMOVE;
 
     /* Checked before opening: a disk appearing usually means filesystem metrics
@@ -154,21 +184,24 @@ static gboolean try_open_persistence(gpointer user_data) {
         return G_SOURCE_REMOVE;
     }
 
-    persist = persist_open(&registry, &store->tiers[STORE_TIERS - 1]);
-    if (!persist)
-        return G_SOURCE_CONTINUE;
+    for (guint i = 0; i < STORE_TIERS; i++) {
+        persists[i] = persist_open(&registry, &store->tiers[i], PERSIST_FILES[i]);
+        if (!persists[i]) {
+            close_persistence();
+            return G_SOURCE_CONTINUE;
+        }
 
-    /* Only adopt the saved history when nothing has been recorded yet.
-     * Replaying older samples on top of newer ones would put the tier out of
-     * order, and after a late mount the coarse tier is almost always still
-     * empty because it only produces a sample every five minutes. */
-    if (store_tier_count(store, STORE_TIERS - 1) == 0)
-        persist_load(persist, store, STORE_TIERS - 1);
+        /* Only adopt the saved history when nothing has been recorded yet.
+         * Replaying older samples on top of newer ones would put the tier out
+         * of order, and after a late mount a tier is usually still empty. */
+        if (store_tier_count(store, i) == 0)
+            persist_load(persists[i], store, i);
 
-    persist_sync(persist, store, STORE_TIERS - 1);
-    store_set_tier_callback(store, STORE_TIERS - 1, on_coarse_sample, NULL);
-    api.persist_path = persist_path(persist);
+        persist_sync(persists[i], store, i);
+        store_set_tier_callback(store, i, on_tier_sample, GUINT_TO_POINTER(i));
+    }
 
+    api.persist_path = persist_path(persists[STORE_TIERS - 1]);
     persist_retry_timer = 0;
     return G_SOURCE_REMOVE;
 }
@@ -182,11 +215,7 @@ static gboolean try_open_persistence(gpointer user_data) {
 static void rebuild_for_new_storage(void) {
     syslog(LOG_INFO, "storage changed, rediscovering metrics");
 
-    if (persist) {
-        store_set_tier_callback(store, STORE_TIERS - 1, NULL, NULL);
-        persist_close(persist);
-        persist = NULL;
-    }
+    close_persistence();
     alerts_free(alerts);
     store_free(store);
     collector_free(collector);
@@ -218,7 +247,10 @@ static gboolean on_sample_tick(gpointer user_data) {
     alerts_evaluate(alerts, sample_buffer);
     sse_broadcast();
     mqtt_tick(mqtt);
+    influx_tick(influx);
+    procs_tick(procs);
     g_strlcpy(api.mqtt_status, mqtt_state(mqtt), sizeof(api.mqtt_status));
+    g_strlcpy(api.influx_status, influx_state(influx), sizeof(api.influx_status));
     return G_SOURCE_CONTINUE;
 }
 
@@ -257,6 +289,29 @@ static void apply_mqtt_settings(void) {
     mqtt_apply(mqtt, &config);
 }
 
+static void apply_influx_settings(void) {
+    InfluxConfig config;
+    memset(&config, 0, sizeof(config));
+
+    config.enabled = parameter_is_yes("InfluxEnabled");
+    config.version = g_strcmp0(parameter_value("InfluxVersion"), "v1") == 0 ? INFLUX_V1 : INFLUX_V2;
+    g_strlcpy(config.url, parameter_value("InfluxUrl"), sizeof(config.url));
+    g_strlcpy(config.database, parameter_value("InfluxDatabase"), sizeof(config.database));
+    g_strlcpy(config.org, parameter_value("InfluxOrg"), sizeof(config.org));
+    g_strlcpy(config.token, parameter_value("InfluxToken"), sizeof(config.token));
+    g_strlcpy(config.username, parameter_value("InfluxUsername"), sizeof(config.username));
+    g_strlcpy(config.password, parameter_value("InfluxPassword"), sizeof(config.password));
+
+    const char *measurement = parameter_value("InfluxMeasurement");
+    g_strlcpy(config.measurement, measurement && *measurement ? measurement : "axis_metrics",
+              sizeof(config.measurement));
+
+    config.interval_s = (guint)g_ascii_strtoull(parameter_value("InfluxInterval"), NULL, 10);
+    config.interval_s = CLAMP(config.interval_s, 1, 3600);
+
+    influx_apply(influx, &config);
+}
+
 static void restart_sampler(void) {
     guint interval = (guint)g_ascii_strtoull(parameter_value("SampleInterval"), NULL, 10);
     interval = CLAMP(interval, 1, 10);
@@ -281,6 +336,7 @@ static void on_parameter_changed(const gchar *name, const gchar *value, gpointer
     syslog(LOG_INFO, "parameter %s changed", parameter->name);
     restart_sampler();
     apply_mqtt_settings();
+    apply_influx_settings();
 }
 
 /* ---------------------------------------------------------------- settings */
@@ -509,6 +565,7 @@ static gboolean handle_request(GSocketConnection *connection,
         if (changed) {
             restart_sampler();
             apply_mqtt_settings();
+            apply_influx_settings();
         }
     } else if (is_get && route_is(path, "meta")) {
         send_json(out, api_meta_json(&api));
@@ -522,6 +579,11 @@ static gboolean handle_request(GSocketConnection *connection,
         gchar *text = api_prometheus_text(&api);
         send_response(out, "200 OK", "text/plain; version=0.0.4; charset=utf-8", text);
         g_free(text);
+    } else if (is_get && route_is(path, "processes")) {
+        gchar *limit = api_query_param(path, "limit");
+        guint count = limit ? (guint)g_ascii_strtoull(limit, NULL, 10) : 12;
+        g_free(limit);
+        send_json(out, procs_json(procs, CLAMP(count, 1, 100)));
     } else if (is_get && route_is(path, "alerts")) {
         send_json(out, alerts_json(alerts));
     } else if (strcmp(method, "POST") == 0 && route_is(path, "rules")) {
@@ -677,6 +739,8 @@ int main(void) {
     api_read_device_info(&api.device, parameter_handle);
 
     mqtt = mqtt_new(&api);
+    influx = influx_new(&api);
+    procs = procs_new();
     alerts = alerts_new(&api);
     alerts_set_notify(alerts, on_alert_changed, NULL);
 
@@ -690,9 +754,9 @@ int main(void) {
     start_http_server();
     restart_sampler();
     apply_mqtt_settings();
+    apply_influx_settings();
 
-    /* Only the coarse tier is persisted: it is the one whose window is
-     * worthless if a reboot wipes it. */
+    /* Every tier is persisted, so the short windows survive a restart too. */
     if (try_open_persistence(NULL) == G_SOURCE_CONTINUE)
         persist_retry_timer = g_timeout_add_seconds(PERSIST_RETRY_S, try_open_persistence, NULL);
 
@@ -709,8 +773,10 @@ int main(void) {
     g_free(sample_buffer);
     alerts_free(alerts);
     mqtt_free(mqtt);
+    influx_free(influx);
+    procs_free(procs);
     selection_free(api.selection);
-    persist_close(persist);
+    close_persistence();
     store_free(store);
     collector_free(collector);
     metrics_registry_clear(&registry);

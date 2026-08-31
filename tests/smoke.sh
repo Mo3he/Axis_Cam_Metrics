@@ -84,6 +84,15 @@ body=$(get "$BASE/data/alerts")
 json_check "$body" "len(d['rules']) > 0" "has rules"
 json_check "$body" "'firing' in d" "reports a firing count"
 
+echo "processes"
+body=$(get "$BASE/data/processes?limit=5")
+json_check "$body" "len(d['processes']) == 5" "honours the limit"
+json_check "$body" "d['total'] > 10" "counts every process"
+json_check "$body" "all(p['rss'] > 0 for p in d['processes'])" "reports resident memory"
+# Shares of the whole device, so the busiest process cannot exceed 100.
+json_check "$body" "all(0 <= p['cpu'] <= 100 for p in d['processes'])" "cpu is a whole-device share"
+json_check "$body" "d['processes'] == sorted(d['processes'], key=lambda p: -p['cpu'])" "sorted by cpu"
+
 echo "prometheus"
 body=$(get "$BASE/data/prometheus")
 case "$body" in

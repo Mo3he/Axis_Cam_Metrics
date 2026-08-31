@@ -67,6 +67,18 @@ static const char *ha_unit_for(const char *unit) {
     return unit;
 }
 
+/* Values are published in base units, because a payload whose unit changed with
+ * its magnitude would break every consumer doing arithmetic on it. Home
+ * Assistant converts for display instead, but only if it is told what to show;
+ * without this a 3.6 TB disk reads as 3600000000000 B. */
+static const char *ha_suggested_unit(const MetricDef *def) {
+    if (strcmp(def->unit, "B") == 0)
+        return g_str_has_prefix(def->id, "fs.") ? "GB" : "MB";
+    if (strcmp(def->unit, "B/s") == 0)
+        return "MB/s";
+    return NULL;
+}
+
 static void topic(const Mqtt *mqtt, char *out, gsize len, const char *leaf) {
     g_snprintf(out, len, "%s/%s", mqtt->config.topic_prefix, leaf);
 }
@@ -132,6 +144,11 @@ static void publish_discovery(Mqtt *mqtt) {
         const char *device_class = device_class_for(def->unit);
         if (device_class)
             g_string_append_printf(payload, "\"device_class\":\"%s\",", device_class);
+        const char *suggested = ha_suggested_unit(def);
+        if (suggested) {
+            g_string_append_printf(payload, "\"suggested_unit_of_measurement\":\"%s\",", suggested);
+            g_string_append(payload, "\"suggested_display_precision\":1,");
+        }
         g_string_append(payload, "\"state_class\":\"measurement\",");
         g_string_append_printf(payload,
                                "\"device\":{\"identifiers\":[\"axis_%s\"],\"name\":\"%s\","

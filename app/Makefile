@@ -1,5 +1,5 @@
 PROG = Metrics
-SRCS = main.c metrics.c collect.c store.c api.c persist.c mqtt.c vapix.c alerts.c selection.c
+SRCS = main.c metrics.c collect.c store.c api.c persist.c mqtt.c vapix.c alerts.c selection.c influx.c procs.c
 OBJS = $(SRCS:.c=.o)
 PKGS = axparameter axevent glib-2.0 gio-2.0 libcurl
 

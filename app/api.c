@@ -335,11 +335,13 @@ gchar *api_health_json(const Api *api) {
     GString *out = g_string_new(NULL);
     g_string_append_printf(out,
                            "{\"ok\":true,\"metrics\":%u,\"uptime\":%" G_GINT64_FORMAT
-                           ",\"samples\":%u,\"bytes\":%zu,\"persisted\":%s,\"mqtt\":\"%s\"}",
+                           ",\"samples\":%u,\"bytes\":%zu,\"persisted\":%s,\"mqtt\":\"%s\""
+                           ",\"influx\":\"%s\"}",
                            api->registry->count, (gint64)time(NULL) - api->started,
                            api->store->tiers[0].count, store_bytes(api->store),
                            api->persist_path ? "true" : "false",
-                           api->mqtt_status[0] ? api->mqtt_status : "disabled");
+                           api->mqtt_status[0] ? api->mqtt_status : "disabled",
+                           api->influx_status[0] ? api->influx_status : "disabled");
     return take(out);
 }
 

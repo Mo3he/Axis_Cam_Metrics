@@ -25,6 +25,7 @@ typedef struct {
     const char *app_version;
     const char *persist_path; /* NULL when history is memory-only. */
     char mqtt_status[16];
+    char influx_status[16];
     gint64 started;
 } Api;
 

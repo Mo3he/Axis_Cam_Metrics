@@ -156,6 +156,11 @@ void store_push(Store *store, const float *values, gint64 timestamp) {
     store->has_latest = TRUE;
 
     tier_append(&store->tiers[0], store->n_metrics, values, timestamp);
+    if (store->tiers[0].callback) {
+        pending[0] = store->tiers[0].callback;
+        pending_data[0] = store->tiers[0].callback_data;
+        pending_values[0] = g_memdup2(values, store->n_metrics * sizeof(float));
+    }
 
     for (guint i = 1; i < STORE_TIERS; i++) {
         StoreTier *tier = &store->tiers[i];
@@ -186,7 +191,7 @@ void store_push(Store *store, const float *values, gint64 timestamp) {
 
     g_mutex_unlock(&store->lock);
 
-    for (guint i = 1; i < STORE_TIERS; i++) {
+    for (guint i = 0; i < STORE_TIERS; i++) {
         if (pending[i]) {
             pending[i](pending_values[i], timestamp, pending_data[i]);
             g_free(pending_values[i]);

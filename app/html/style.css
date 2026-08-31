@@ -226,6 +226,112 @@ body {
   font-weight: 600;
 }
 
+.panel {
+  margin-top: 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.panel-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.panel-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+table.procs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+table.procs th {
+  padding: 4px 8px;
+  text-align: left;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+}
+
+table.procs td {
+  padding: 4px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+table.procs tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+
+table.procs .num {
+  text-align: right;
+}
+
+.rule-list {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.rule {
+  display: grid;
+  grid-template-columns: 1.1fr 1.4fr auto 90px 80px auto auto;
+  gap: 6px;
+  align-items: center;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.rule input[readonly] {
+  color: var(--muted);
+}
+
+.rule-threshold {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rule-threshold input {
+  width: 100%;
+  min-width: 0;
+}
+
+.rule-threshold small {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.rule button[data-remove] {
+  padding: 2px 8px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+@media (max-width: 720px) {
+  .rule {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .metric-list {
   max-height: 340px;
   overflow-y: auto;
