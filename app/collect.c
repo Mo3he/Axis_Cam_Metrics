@@ -910,6 +910,33 @@ static void sample_mounts(Collector *c, float *values) {
     }
 }
 
+gboolean collector_mounts_changed(Collector *c) {
+    FILE *f = fopen("/proc/mounts", "re");
+    if (!f)
+        return FALSE;
+
+    char device[128], mountpoint[256], fstype[32], options[256];
+    char seen[MAX_MOUNTS][128];
+    guint count = 0;
+
+    while (fscanf(f, "%127s %255s %31s %255s %*d %*d\n", device, mountpoint, fstype, options) == 4 &&
+           count < MAX_MOUNTS) {
+        if (!mount_is_interesting(device, mountpoint, fstype, options))
+            continue;
+        gboolean duplicate = FALSE;
+        for (guint i = 0; i < count; i++) {
+            if (strcmp(seen[i], device) == 0)
+                duplicate = TRUE;
+        }
+        if (duplicate)
+            continue;
+        g_strlcpy(seen[count++], device, sizeof(seen[0]));
+    }
+    fclose(f);
+
+    return count != c->n_mounts;
+}
+
 void collector_sample(Collector *c, float *values) {
     gint64 now = g_get_monotonic_time();
     gboolean first = (c->prev_us == 0);

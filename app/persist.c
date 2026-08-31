@@ -52,6 +52,9 @@ struct Persist {
     gsize records_offset;
     gsize record_bytes;
     float *record;
+    /* Until persist_sync has laid the file out, head and count are still zero
+     * and writing them would destroy the saved index. */
+    gboolean owns_file;
 };
 
 /* ------------------------------------------------------- storage discovery */
@@ -159,9 +162,15 @@ static void write_header(Persist *persist) {
 }
 
 Persist *persist_open(const MetricRegistry *registry, const StoreTier *tier) {
+    static gboolean absence_logged;
+
     char base[256];
     if (!find_storage(base, sizeof(base))) {
-        syslog(LOG_INFO, "no SD card or disk found, history stays in memory");
+        /* Storage is retried on a timer, so this must not repeat every go. */
+        if (!absence_logged) {
+            syslog(LOG_INFO, "no SD card or disk mounted yet, history stays in memory for now");
+            absence_logged = TRUE;
+        }
         return NULL;
     }
 
@@ -198,7 +207,8 @@ void persist_close(Persist *persist) {
     if (!persist)
         return;
     if (persist->fd >= 0) {
-        write_header(persist);
+        if (persist->owns_file)
+            write_header(persist);
         close(persist->fd);
     }
     g_free(persist->record);
@@ -214,6 +224,7 @@ const char *persist_path(const Persist *persist) {
 static void initialise_file(Persist *persist, const MetricRegistry *registry) {
     persist->head = 0;
     persist->count = 0;
+    persist->owns_file = TRUE;
 
     char *table = g_malloc0(id_table_bytes(registry->count));
     for (guint i = 0; i < registry->count; i++)

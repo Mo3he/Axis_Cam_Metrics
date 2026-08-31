@@ -14,4 +14,9 @@ void collector_free(Collector *collector);
  * first call leaves every rate metric at NAN. */
 void collector_sample(Collector *collector, float *values);
 
+/* True when a filesystem has appeared or gone away since discovery. Storage is
+ * often mounted after an ACAP starts at boot, and those metrics can only be
+ * registered by rebuilding. */
+gboolean collector_mounts_changed(Collector *collector);
+
 #endif /* COLLECT_H */

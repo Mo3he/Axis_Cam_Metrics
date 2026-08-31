@@ -130,6 +130,87 @@ static void on_alert_changed(const AlertRule *rule, gboolean firing, gpointer us
     mqtt_publish_alert(mqtt, rule->id, rule->name, rule->metric, rule->last_value, firing);
 }
 
+/* Storage is not necessarily mounted when an ACAP starts at boot: on a recorder
+ * the app came up more than an hour before the disk appeared, and a one-shot
+ * probe left history in memory for the whole run. Retrying also means an SD
+ * card inserted later starts being used without a restart. */
+#define PERSIST_RETRY_S 30
+
+static guint persist_retry_timer;
+
+static void rebuild_for_new_storage(void);
+
+static gboolean try_open_persistence(gpointer user_data) {
+    (void)user_data;
+    if (persist)
+        return G_SOURCE_REMOVE;
+
+    /* Checked before opening: a disk appearing usually means filesystem metrics
+     * are missing too, and opening the history only to close it again during
+     * the rebuild would rewrite its header. */
+    if (collector_mounts_changed(collector)) {
+        persist_retry_timer = 0;
+        rebuild_for_new_storage();
+        return G_SOURCE_REMOVE;
+    }
+
+    persist = persist_open(&registry, &store->tiers[STORE_TIERS - 1]);
+    if (!persist)
+        return G_SOURCE_CONTINUE;
+
+    /* Only adopt the saved history when nothing has been recorded yet.
+     * Replaying older samples on top of newer ones would put the tier out of
+     * order, and after a late mount the coarse tier is almost always still
+     * empty because it only produces a sample every five minutes. */
+    if (store_tier_count(store, STORE_TIERS - 1) == 0)
+        persist_load(persist, store, STORE_TIERS - 1);
+
+    persist_sync(persist, store, STORE_TIERS - 1);
+    store_set_tier_callback(store, STORE_TIERS - 1, on_coarse_sample, NULL);
+    api.persist_path = persist_path(persist);
+
+    persist_retry_timer = 0;
+    return G_SOURCE_REMOVE;
+}
+
+/* Rebuilding is the only way to pick up a filesystem that mounted after the
+ * metric registry was built, and the registry's size is baked into the store
+ * and the sample buffer. It is rare: only when the mount set actually changes,
+ * which in practice means a disk appearing at boot or a card being inserted.
+ * The coarse history is reloaded from disk afterwards and remaps by metric id,
+ * so nothing durable is lost. */
+static void rebuild_for_new_storage(void) {
+    syslog(LOG_INFO, "storage changed, rediscovering metrics");
+
+    if (persist) {
+        store_set_tier_callback(store, STORE_TIERS - 1, NULL, NULL);
+        persist_close(persist);
+        persist = NULL;
+    }
+    alerts_free(alerts);
+    store_free(store);
+    collector_free(collector);
+    metrics_registry_clear(&registry);
+    g_free(sample_buffer);
+
+    metrics_registry_init(&registry);
+    collector = collector_new(&registry);
+    sample_buffer = g_new0(float, registry.count);
+    store = store_new(&registry, sample_interval_s);
+
+    api.registry = &registry;
+    api.store = store;
+    api.persist_path = NULL;
+
+    alerts = alerts_new(&api);
+    alerts_set_notify(alerts, on_alert_changed, NULL);
+
+    if (try_open_persistence(NULL) == G_SOURCE_CONTINUE && !persist_retry_timer)
+        persist_retry_timer = g_timeout_add_seconds(PERSIST_RETRY_S, try_open_persistence, NULL);
+
+    syslog(LOG_INFO, "now tracking %u metrics", registry.count);
+}
+
 static gboolean on_sample_tick(gpointer user_data) {
     (void)user_data;
     collector_sample(collector, sample_buffer);
@@ -588,19 +669,9 @@ int main(void) {
     guint interval = (guint)g_ascii_strtoull(parameter_value("SampleInterval"), NULL, 10);
     store = store_new(&registry, CLAMP(interval, 1, 10));
 
-    /* Only the coarse tier is persisted: it is the one whose window (30 days)
-     * is worthless if a reboot wipes it. */
-    persist = persist_open(&registry, &store->tiers[STORE_TIERS - 1]);
-    if (persist) {
-        persist_load(persist, store, STORE_TIERS - 1);
-        persist_sync(persist, store, STORE_TIERS - 1);
-        store_set_tier_callback(store, STORE_TIERS - 1, on_coarse_sample, NULL);
-    }
-
     api.registry = &registry;
     api.store = store;
     api.selection = selection_new();
-    api.persist_path = persist_path(persist);
     api.app_version = APP_VERSION;
     api.started = (gint64)time(NULL);
     api_read_device_info(&api.device, parameter_handle);
@@ -619,12 +690,20 @@ int main(void) {
     start_http_server();
     restart_sampler();
     apply_mqtt_settings();
+
+    /* Only the coarse tier is persisted: it is the one whose window is
+     * worthless if a reboot wipes it. */
+    if (try_open_persistence(NULL) == G_SOURCE_CONTINUE)
+        persist_retry_timer = g_timeout_add_seconds(PERSIST_RETRY_S, try_open_persistence, NULL);
+
     on_sample_tick(NULL); /* Seed the counters so the first tick yields real rates. */
 
     g_main_loop_run(main_loop);
 
     if (sample_timer)
         g_source_remove(sample_timer);
+    if (persist_retry_timer)
+        g_source_remove(persist_retry_timer);
     for (gsize i = 0; i < G_N_ELEMENTS(parameters); i++)
         g_free(parameters[i].value);
     g_free(sample_buffer);
