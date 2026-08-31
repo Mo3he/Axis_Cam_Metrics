@@ -285,51 +285,107 @@ table.procs .num {
 
 .rule-list {
   display: grid;
-  gap: 6px;
-  margin-bottom: 8px;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+/* Name, metric, condition, threshold, duration, enabled, delete. */
+.rule-columns {
+  grid-template-columns: 1.2fr 1.6fr 8.5rem 8.5rem 8rem auto 2rem;
+}
+
+.rule-head,
+.rule {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+}
+
+.rule-head {
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .rule {
-  display: grid;
-  grid-template-columns: 1.1fr 1.4fr auto 90px 80px auto auto;
-  gap: 6px;
-  align-items: center;
-  padding: 6px;
+  padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
 
-.rule input[readonly] {
-  color: var(--muted);
+.rule:nth-child(odd) {
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
 }
 
-.rule-threshold {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.rule-threshold input {
+.settings .rule input,
+.settings .rule select {
   width: 100%;
   min-width: 0;
+  margin: 0;
 }
 
-.rule-threshold small {
+/* Overrides the dialog's own "label > span is a block" rule, which would
+   otherwise drop the unit onto its own line under the field. */
+.settings .rule .with-unit {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+}
+
+.settings .rule .with-unit small {
+  display: inline;
+  margin: 0;
   color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
 }
 
+.settings .rule label.check {
+  justify-content: center;
+  margin: 0;
+}
+
 .rule button[data-remove] {
-  padding: 2px 8px;
-  font-size: 16px;
+  padding: 3px 8px;
+  font-size: 15px;
   line-height: 1;
 }
 
-@media (max-width: 720px) {
+.rule .rule-locked {
+  color: var(--muted);
+  text-align: center;
+  font-size: 14px;
+  cursor: help;
+}
+
+@media (max-width: 900px) {
+  .rule-head {
+    display: none;
+  }
+
   .rule {
     grid-template-columns: 1fr 1fr;
   }
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The half-filled disc turns with the theme, so the button shows its state
+   without needing three different icons. */
+.theme-toggle svg {
+  transition: transform 0.2s ease;
+}
+
+:root[data-theme="dark"] .theme-toggle svg {
+  transform: rotate(180deg);
 }
 
 .metric-list {
@@ -425,7 +481,7 @@ button.primary {
 }
 
 .settings {
-  width: min(640px, 92vw);
+  width: min(1080px, 95vw);
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 12px;

@@ -16,6 +16,13 @@
       <div class="controls">
         <div class="ranges" id="ranges" role="group" aria-label="Time range"></div>
         <span class="pill" id="status">connecting</span>
+        <button type="button" class="ghost theme-toggle" id="theme-toggle">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+            <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5" />
+            <path d="M8 1.75a6.25 6.25 0 0 0 0 12.5z" fill="currentColor" />
+          </svg>
+          <span id="theme-label">Auto</span>
+        </button>
         <button type="button" class="ghost" id="settings-open" hidden>Settings</button>
       </div>
     </header>
@@ -23,18 +30,6 @@
     <dialog id="settings" class="settings">
       <form method="dialog" id="settings-form">
         <h2>Settings</h2>
-
-        <fieldset>
-          <legend>Appearance</legend>
-          <label>
-            <span>Theme</span>
-            <select id="theme-select">
-              <option value="auto">Match system</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </label>
-        </fieldset>
 
         <fieldset>
           <legend>Metrics</legend>
@@ -54,6 +49,15 @@
             and are published to MQTT. Built-in rules can be adjusted or switched off but not
             deleted.
           </small>
+          <div class="rule-head rule-columns">
+            <span>Name</span>
+            <span>Metric</span>
+            <span>Condition</span>
+            <span>Threshold</span>
+            <span>Held for</span>
+            <span>On</span>
+            <span></span>
+          </div>
           <div class="rule-list" id="rule-list"></div>
           <button type="button" class="ghost" id="rule-add">Add rule</button>
         </fieldset>
@@ -132,8 +136,6 @@
     </dialog>
 
     <p class="banner" id="banner" hidden></p>
-
-    <datalist id="metric-options"></datalist>
 
     <section class="alerts" id="alerts" hidden></section>
 

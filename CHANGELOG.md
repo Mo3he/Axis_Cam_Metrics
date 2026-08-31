@@ -16,6 +16,14 @@
 
 ### Fixed
 
+- MQTT sent a stored password even when the username was empty. MQTT forbids
+  that, so the broker closed the connection at protocol level and the status sat
+  on "connecting" forever with nothing in the log to say why.
+- Changing either Home Assistant discovery setting did nothing until the
+  connection happened to drop, because discovery was only published on connect.
+- Discovery configs are retained, and ones no longer wanted were never
+  withdrawn, so a metric dropped by an upgrade or a removed SD card left a dead
+  entity in Home Assistant forever.
 - Every history tier is persisted, not just the 5-minute one, so the 5m, 15m,
   30m, 1h and 6h ranges survive a restart instead of starting empty.
 - Storage that mounts after the app starts is now picked up. An ACAP usually
@@ -33,6 +41,14 @@
 
 ### Changed
 
+- The default set of Home Assistant entities is now the metrics worth putting on
+  a dashboard. Named sensors such as Optics and ImageSensor replace the raw
+  kernel thermal zones, SD card wear and PoE totals are included, and constants
+  like `mem.total`, the internal `/mnt/flash` and `/mnt/persistent` partitions
+  and VLAN sub-interfaces are not. A recorder gained its disk and PoE readings
+  and lost sixteen per-VLAN throughput entities.
+- The theme control moved out of the settings dialog into a button in the
+  header, so it no longer needs admin rights to reach.
 - The history file header is flushed periodically rather than on every sample.
   Rewriting 4 KB once a second would have cost more card wear than the samples.
   An unclean shutdown now loses the last few samples of a tier rather than the

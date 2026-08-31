@@ -41,6 +41,28 @@
     try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; }
   }
 
+  var THEME_ORDER = ["auto", "light", "dark"];
+  var THEME_LABELS = { auto: "Auto", light: "Light", dark: "Dark" };
+
+  function showTheme(theme) {
+    applyTheme(theme);
+    document.getElementById("theme-label").textContent = THEME_LABELS[theme];
+    document.getElementById("theme-toggle").title =
+      "Theme: " + THEME_LABELS[theme] + ". Click to change.";
+  }
+
+  /* Lives in the header rather than the settings dialog: the theme is a per
+   * browser preference, so it should not need the admin rights that opening
+   * settings does. */
+  function setupTheme() {
+    showTheme(currentTheme());
+    document.getElementById("theme-toggle").addEventListener("click", function () {
+      var next = THEME_ORDER[(THEME_ORDER.indexOf(currentTheme()) + 1) % THEME_ORDER.length];
+      showTheme(next);
+      if (meta) rebuildCharts();
+    });
+  }
+
   function cssVar(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
@@ -591,7 +613,6 @@
         fillSettings(values);
         applyInfluxVersion();
         buildMetricList();
-        document.getElementById("theme-select").value = currentTheme();
         document.getElementById("settings").showModal();
         return buildRuleList();
       })
@@ -677,10 +698,6 @@
       document.getElementById("settings-save").addEventListener("click", saveSettings);
       document.getElementById("rule-add").addEventListener("click", addRule);
       settingsForm().elements.InfluxVersion.addEventListener("change", applyInfluxVersion);
-      document.getElementById("theme-select").addEventListener("change", function (event) {
-        applyTheme(event.target.value);
-        rebuildCharts();
-      });
       refreshHealth();
       setInterval(refreshHealth, 10000);
     });
@@ -721,52 +738,87 @@
   /* ---------------------------------------------------------- rule editor */
 
   var deletedRules = [];
+  var metricOptionsHtml = null;
 
   function metricUnit(id) {
     var found = meta.metrics.filter(function (m) { return m.id === id; })[0];
     return found ? found.unit : "";
   }
 
+  /* Built once and reused: with a couple of hundred metrics on a recorder,
+   * rebuilding the option list for every rule is wasted work. */
+  function metricOptions() {
+    if (metricOptionsHtml !== null) return metricOptionsHtml;
+    var groups = {};
+    meta.metrics.forEach(function (m) { (groups[m.group] = groups[m.group] || []).push(m); });
+    metricOptionsHtml = Object.keys(groups)
+      .sort()
+      .map(function (group) {
+        var options = groups[group]
+          .map(function (m) {
+            return '<option value="' + escapeHtml(m.id) + '">' + escapeHtml(m.label) +
+              (m.unit ? " (" + escapeHtml(m.unit) + ")" : "") + "</option>";
+          })
+          .join("");
+        return '<optgroup label="' + escapeHtml(group) + '">' + options + "</optgroup>";
+      })
+      .join("");
+    return metricOptionsHtml;
+  }
+
   function ruleRow(rule) {
     var row = document.createElement("div");
-    row.className = "rule";
+    row.className = "rule rule-columns";
     row.dataset.id = rule.id;
-    row.dataset.builtin = rule.builtin ? "yes" : "no";
     row.innerHTML =
-      '<input type="text" data-field="name" value="' + escapeHtml(rule.name) + '" aria-label="Rule name" />' +
-      '<input type="text" list="metric-options" data-field="metric" value="' + escapeHtml(rule.metric) +
-      '" aria-label="Metric"' + (rule.builtin ? " readonly" : "") + " />" +
-      '<select data-field="op" aria-label="Comparison">' +
-      '<option value="above"' + (rule.op === "above" ? " selected" : "") + ">rises above</option>" +
-      '<option value="below"' + (rule.op === "below" ? " selected" : "") + ">falls below</option>" +
+      '<input type="text" data-field="name" value="' + escapeHtml(rule.name) +
+      '" aria-label="Rule name" placeholder="Describe what this watches" />' +
+      '<select data-field="metric" aria-label="Metric"' + (rule.builtin ? " disabled" : "") + ">" +
+      '<option value="">Choose a metric</option>' + metricOptions() + "</select>" +
+      '<select data-field="op" aria-label="Condition">' +
+      '<option value="above">rises above</option>' +
+      '<option value="below">falls below</option>' +
       "</select>" +
-      '<span class="rule-threshold"><input type="number" step="any" data-field="threshold" value="' +
-      rule.threshold + '" aria-label="Threshold" /><small data-unit>' +
-      escapeHtml(metricUnit(rule.metric)) + "</small></span>" +
-      '<span class="rule-threshold"><input type="number" min="0" max="86400" data-field="duration" value="' +
-      rule.duration + '" aria-label="Duration" /><small>s</small></span>' +
+      '<span class="with-unit">' +
+      '<input type="number" step="any" data-field="threshold" value="' + rule.threshold +
+      '" aria-label="Threshold" /><small data-unit>' + escapeHtml(metricUnit(rule.metric)) +
+      "</small></span>" +
+      '<span class="with-unit">' +
+      '<input type="number" min="0" max="86400" data-field="duration" value="' + rule.duration +
+      '" aria-label="Held for" /><small>sec</small></span>' +
       '<label class="check"><input type="checkbox" data-field="enabled"' +
-      (rule.enabled ? " checked" : "") + ' /><span>On</span></label>' +
-      '<button type="button" class="ghost" data-remove' + (rule.builtin ? " disabled" : "") +
-      ' title="' + (rule.builtin ? "Built-in rules cannot be deleted" : "Delete this rule") + '">&times;</button>';
+      (rule.enabled ? " checked" : "") + ' aria-label="Enabled" /></label>' +
+      (rule.builtin
+        ? '<span class="rule-locked" title="Built in: it can be retuned or switched off, but not deleted">\u2013</span>'
+        : '<button type="button" class="ghost" data-remove title="Delete this rule">&times;</button>');
 
-    row.querySelector('[data-field="metric"]').addEventListener("change", function (event) {
+    var metric = row.querySelector('[data-field="metric"]');
+    metric.value = rule.metric;
+    /* A rule can outlive the metric it watches, for instance a card that was
+     * removed, and silently retargeting it would be worse than showing it. */
+    if (rule.metric && metric.value !== rule.metric) {
+      metric.insertAdjacentHTML("afterbegin",
+        '<option value="' + escapeHtml(rule.metric) + '">' + escapeHtml(rule.metric) +
+        " (not reported now)</option>");
+      metric.value = rule.metric;
+    }
+    row.querySelector('[data-field="op"]').value = rule.op;
+
+    metric.addEventListener("change", function (event) {
       row.querySelector("[data-unit]").textContent = metricUnit(event.target.value);
     });
-    row.querySelector("[data-remove]").addEventListener("click", function () {
-      deletedRules.push(rule.id);
-      row.remove();
-    });
+    var remove = row.querySelector("[data-remove]");
+    if (remove) {
+      remove.addEventListener("click", function () {
+        deletedRules.push(rule.id);
+        row.remove();
+      });
+    }
     return row;
   }
 
   function buildRuleList() {
     deletedRules = [];
-    var options = document.getElementById("metric-options");
-    options.innerHTML = meta.metrics
-      .map(function (m) { return '<option value="' + escapeHtml(m.id) + '">' + escapeHtml(m.label) + "</option>"; })
-      .join("");
-
     return getJson("alerts").then(function (payload) {
       var host = document.getElementById("rule-list");
       host.innerHTML = "";
@@ -776,9 +828,12 @@
 
   function addRule() {
     var id = "custom_" + Date.now().toString(36);
-    document.getElementById("rule-list").appendChild(
-      ruleRow({ id: id, name: "", metric: "", op: "above", threshold: 0, duration: 60, enabled: true, builtin: false })
-    );
+    var row = ruleRow({
+      id: id, name: "", metric: "", op: "above", threshold: 0, duration: 60,
+      enabled: true, builtin: false
+    });
+    document.getElementById("rule-list").appendChild(row);
+    row.querySelector('[data-field="name"]').focus();
   }
 
   function postRule(body) {
@@ -934,6 +989,6 @@
   }
 
   window.addEventListener("resize", resizeCharts);
-  applyTheme(currentTheme());
+  setupTheme();
   start();
 })();

@@ -107,9 +107,27 @@ can be relied on. TLS uses the device's own OpenSSL 3 and CA trust store.
 
 Discovery configs are published to `homeassistant/sensor/<serial>_<metric>/config`,
 grouped under one device per camera, with the availability topic wired up so
-entities go unavailable when the device does. By default a curated subset is
-exposed (CPU, memory, load, uptime, temperatures, filesystem usage and network
-throughput); `MqttDiscoveryAll` publishes every metric instead.
+entities go unavailable when the device does.
+
+By default only the metrics worth putting on a dashboard or alerting on become
+entities, which is around 17 on a camera:
+
+| Included | Deliberately not included |
+|---|---|
+| CPU usage, memory usage and used, load average, uptime | `mem.total` and other constants |
+| Named sensors: CPU, Optics, ImageSensor, IR, heater, fan | The raw kernel thermal zones, unless a device reports no named sensors |
+| Usage of removable storage (SD card, disk) | `/mnt/flash` and `/mnt/persistent`, which barely move and cannot be acted on |
+| SD card wear and pre-EOL state | |
+| PoE total and budget | Per-port PoE power, which is 32 entities on an eight-port recorder |
+| Throughput of real interfaces | VLAN sub-interfaces such as `eth1_3` |
+
+`MqttDiscoveryAll` publishes every metric instead. Changing either discovery
+setting republishes immediately rather than waiting for a reconnect.
+
+Discovery configs are retained, so a config this device published before but no
+longer wants is withdrawn with an empty payload. Without that, a metric dropped
+by an upgrade or a removed SD card would leave a dead entity in Home Assistant
+forever.
 
 Values are always published in base units, so a size is bytes and a rate is
 bytes per second. A unit that changed with magnitude would break arithmetic and
@@ -120,6 +138,10 @@ MB for memory and MB/s for throughput while still storing the raw value.
 Home Assistant only applies a suggested unit when it first creates an entity.
 Sensors created by an earlier version keep showing bytes; change the unit in the
 entity's settings, or delete the device and let discovery recreate it.
+
+A password is only sent when a username is set too. MQTT forbids a password on
+its own, and a broker answers one with a protocol-level disconnect that is
+indistinguishable from an unreachable host.
 
 ## InfluxDB
 
@@ -246,10 +268,10 @@ missing.
 
 ## Appearance
 
-The dashboard follows the system light or dark preference by default, and the
-theme can be pinned to light or dark from the settings page. The choice is
-stored per browser, not on the device, so it does not change what other
-operators see.
+The dashboard follows the system light or dark preference by default. The theme
+button in the header cycles auto, light and dark, and the choice is stored per
+browser rather than on the device, so it does not change what other operators
+see. It needs no admin rights, unlike the settings dialog.
 
 ## Top processes
 
