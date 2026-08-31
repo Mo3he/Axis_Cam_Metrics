@@ -16,6 +16,10 @@
 
 ### Fixed
 
+- The dashboard and `meta` reported the version the source was written with
+  rather than the version of the installed package, because the release tooling
+  only rewrites HTML files. The binary now takes it from the manifest at build
+  time, so there is one place it is recorded.
 - MQTT sent a stored password even when the username was empty. MQTT forbids
   that, so the broker closed the connection at protocol level and the status sat
   on "connecting" forever with nothing in the log to say why.

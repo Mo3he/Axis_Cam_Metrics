@@ -35,7 +35,10 @@
 #include "vapix.h"
 
 #define APP_NAME           "Metrics"
-#define APP_VERSION        "0.1.0" /* acap:installed-version */
+/* Supplied by the Makefile from manifest.json. */
+#ifndef APP_VERSION
+#define APP_VERSION        "0.0.0-dev"
+#endif
 #define SETTINGS_HTTP_PORT 2207
 #define MAX_REQUEST        16384
 /* A series request names every metric it wants, so the path is far longer than
