@@ -2,10 +2,10 @@
  * Metrics Dashboard ACAP entry binary.
  *
  * Owns the parameter store entries, samples the device on a timer into the
- * tiered history store, and serves both the settings endpoint and the
- * read-only metric API on 127.0.0.1:2207. The camera's reverse proxy exposes
- * those as /local/Metrics/api/... (admin) and /local/Metrics/data/... (viewer),
- * so no additional port is opened on the network.
+ * tiered history store, and serves the full API on 127.0.0.1:2207 and a
+ * read-only copy on 127.0.0.1:2209. The camera's reverse proxy exposes those
+ * as /local/Metrics/api/... (admin) and /local/Metrics/data/... (viewer), so
+ * no additional port is opened on the network.
  *
  * The loopback port must be unique across all ACAPs that may run on the same
  * device; see PARAM_CGI_FALLBACK.md for the registry.
@@ -40,6 +40,9 @@
 #define APP_VERSION        "0.0.0-dev"
 #endif
 #define SETTINGS_HTTP_PORT 2207
+/* Target of the viewer-level proxy. The proxy does not tell the app who is
+ * asking, so the port itself is what makes these requests read-only. */
+#define VIEWER_HTTP_PORT   2209
 #define MAX_REQUEST        16384
 /* A series request names every metric it wants, so the path is far longer than
  * a typical URL. */
@@ -556,11 +559,14 @@ static void sse_broadcast(void) {
 static gboolean handle_request(GSocketConnection *connection,
                               const char *method,
                               const char *path,
-                              const char *body) {
+                              const char *body,
+                              gboolean read_only) {
     GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(connection));
     gboolean is_get = strcmp(method, "GET") == 0;
 
-    if (is_get && route_is(path, "settings")) {
+    if (read_only && (!is_get || route_is(path, "settings"))) {
+        send_response(out, "403 Forbidden", "application/json", "{\"error\":\"forbidden\"}");
+    } else if (is_get && route_is(path, "settings")) {
         send_json(out, settings_json());
     } else if (strcmp(method, "POST") == 0 && route_is(path, "settings")) {
         gboolean changed = apply_settings_body(body);
@@ -616,7 +622,7 @@ static gboolean on_http_request(GSocketService *service, GSocketConnection *conn
                                 gpointer user_data) {
     (void)service;
     (void)source;
-    (void)user_data;
+    gboolean read_only = GPOINTER_TO_INT(user_data);
 
     GInputStream *in = g_io_stream_get_input_stream(G_IO_STREAM(connection));
     GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(connection));
@@ -656,7 +662,7 @@ static gboolean on_http_request(GSocketService *service, GSocketConnection *conn
         gchar *path = g_malloc0(MAX_PATH_LENGTH);
         if (sscanf(buffer, "%7s %8191s", method, path) == 2) {
             gchar *request_body = g_strndup(buffer + header_length, total - header_length);
-            keep_open = handle_request(connection, method, path, request_body);
+            keep_open = handle_request(connection, method, path, request_body, read_only);
             g_free(request_body);
         } else {
             send_response(out, "400 Bad Request", "application/json", "{\"error\":\"bad request\"}");
@@ -669,11 +675,11 @@ static gboolean on_http_request(GSocketService *service, GSocketConnection *conn
     return TRUE;
 }
 
-static gboolean start_http_server(void) {
+static gboolean start_http_server(guint16 port, gboolean read_only) {
     GError *error = NULL;
     GSocketService *service = g_socket_service_new();
     GInetAddress *address = g_inet_address_new_loopback(G_SOCKET_FAMILY_IPV4);
-    GSocketAddress *socket_address = g_inet_socket_address_new(address, SETTINGS_HTTP_PORT);
+    GSocketAddress *socket_address = g_inet_socket_address_new(address, port);
     gboolean added = g_socket_listener_add_address(G_SOCKET_LISTENER(service), socket_address,
                                                    G_SOCKET_TYPE_STREAM, G_SOCKET_PROTOCOL_TCP, NULL, NULL, &error);
 
@@ -683,16 +689,16 @@ static gboolean start_http_server(void) {
     if (!added) {
         /* A failure here usually means another ACAP already claimed the port,
          * which would silently forward this app's API to that app. */
-        syslog(LOG_ERR, "http server cannot bind 127.0.0.1:%d: %s", SETTINGS_HTTP_PORT,
+        syslog(LOG_ERR, "http server cannot bind 127.0.0.1:%u: %s", port,
                error ? error->message : "unknown error");
         g_clear_error(&error);
         g_object_unref(service);
         return FALSE;
     }
 
-    g_signal_connect(service, "incoming", G_CALLBACK(on_http_request), NULL);
+    g_signal_connect(service, "incoming", G_CALLBACK(on_http_request), GINT_TO_POINTER(read_only));
     g_socket_service_start(service);
-    syslog(LOG_INFO, "http server listening on 127.0.0.1:%d", SETTINGS_HTTP_PORT);
+    syslog(LOG_INFO, "http server listening on 127.0.0.1:%u%s", port, read_only ? " (read-only)" : "");
     return TRUE;
 }
 
@@ -754,7 +760,8 @@ int main(void) {
     g_unix_signal_add(SIGTERM, on_terminate, NULL);
     g_unix_signal_add(SIGINT, on_terminate, NULL);
 
-    start_http_server();
+    start_http_server(SETTINGS_HTTP_PORT, FALSE);
+    start_http_server(VIEWER_HTTP_PORT, TRUE);
     restart_sampler();
     apply_mqtt_settings();
     apply_influx_settings();

@@ -41,7 +41,7 @@
         },
         {
           "apiPath": "data",
-          "target": "http://localhost:2207/",
+          "target": "http://localhost:2209/",
           "access": "viewer"
         }
       ],

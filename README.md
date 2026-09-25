@@ -351,9 +351,11 @@ curl -k --anyauth -u user:password -X POST \
 ## Ports & security
 
 - The app opens no ports on the device's external interfaces.
-- The HTTP server binds `127.0.0.1:2207` and is reachable only through the
-  device's authenticated reverse proxy.
-- `api/...` requires `admin`; the read-only `data/...` endpoints require `viewer`.
+- The HTTP server binds `127.0.0.1:2207` (full API) and `127.0.0.1:2209`
+  (read-only), both reachable only through the device's authenticated reverse
+  proxy.
+- `api/...` requires `admin`. `data/...` requires `viewer` and is served from
+  the read-only port, which refuses settings and any request that is not a GET.
 
 ## Build from source
 

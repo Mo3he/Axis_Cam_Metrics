@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.2
+
+### Security
+
+- A viewer-level account could change settings. The `data/...` paths meant for
+  viewers reached the same server as the admin `api/...` paths, so a viewer
+  could POST to `data/settings`, `data/rules` or `data/metrics` and change the
+  MQTT and InfluxDB configuration, the alert rules and which metrics are sent.
+  Viewers could also read the non-secret settings, such as broker and database
+  addresses. `data/...` is now served from a separate read-only port that
+  refuses settings and anything other than a GET. The dashboard is unchanged
+  for viewers and admins.
+
 ## 0.1.1
 
 ### Added
