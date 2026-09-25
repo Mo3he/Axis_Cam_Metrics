@@ -263,10 +263,10 @@ static void discover_ifaces(Collector *c) {
         IFACE_METRIC(idx_tx_bps, "tx_bps", "transmit", "B/s");
         IFACE_METRIC(idx_rx_pps, "rx_pps", "receive packets", "/s");
         IFACE_METRIC(idx_tx_pps, "tx_pps", "transmit packets", "/s");
-        IFACE_METRIC(idx_rx_err, "rx_errors", "receive errors", "/s");
-        IFACE_METRIC(idx_tx_err, "tx_errors", "transmit errors", "/s");
-        IFACE_METRIC(idx_rx_drop, "rx_drops", "receive drops", "/s");
-        IFACE_METRIC(idx_tx_drop, "tx_drops", "transmit drops", "/s");
+        IFACE_METRIC(idx_rx_err, "rx_errors", "receive errors", "");
+        IFACE_METRIC(idx_tx_err, "tx_errors", "transmit errors", "");
+        IFACE_METRIC(idx_rx_drop, "rx_drops", "receive drops", "");
+        IFACE_METRIC(idx_tx_drop, "tx_drops", "transmit drops", "");
         IFACE_METRIC(idx_link, "link", "link speed", "Mb/s");
         IFACE_METRIC(idx_up, "up", "link up", "");
 #undef IFACE_METRIC

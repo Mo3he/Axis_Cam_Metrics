@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.3
+
+### Breaking change
+
+- **Prometheus metric names:** the network error and drop counters were
+  labelled as per-second rates, but their values are running totals since the
+  interface came up. They now carry no unit, so the Prometheus names lose the
+  `_per_second` suffix: `axis_net_rx_errors`, `axis_net_tx_errors`,
+  `axis_net_rx_drops` and `axis_net_tx_drops` (previously
+  `axis_net_rx_errors_per_second` and so on). Update any dashboards or alerts
+  that use the old names; use `rate()` or `increase()` for a per-second view.
+  Metric ids (`net.<interface>.rx_errors` ...) and the MQTT and InfluxDB field
+  names are unchanged.
+
 ## 0.1.2
 
 ### Security
