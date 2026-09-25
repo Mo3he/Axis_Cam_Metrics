@@ -1,11 +1,7 @@
 /*
- * Threshold alerting.
- *
- * Each rule watches one metric and fires once the condition has held for its
- * duration, which keeps a single noisy sample from raising an alarm. Firing and
- * clearing are published as stateful Axis events, so they show up in the
- * device's own action rules alongside motion and tampering, and can drive a
- * recording or a notification without this app knowing anything about it.
+ * Threshold alerting. A rule fires once its condition has held for its duration,
+ * and state is published as a stateful Axis event so device action rules can
+ * react to it.
  */
 
 #include "alerts.h"
@@ -29,9 +25,7 @@ struct Alerts {
     gpointer notify_data;
 };
 
-/* Sensible defaults so the app is useful before anyone configures anything.
- * Metric ids that do not exist on this device are skipped at load. Filesystem
- * space is not listed here; a rule is generated per mount below. */
+/* Ids missing on this device are skipped; filesystem rules are generated per mount. */
 static const AlertRule BUILTIN[] = {
     {"cpu_high", "CPU usage high", "cpu.usage", ALERT_ABOVE, 90, 300, TRUE, TRUE, 0, 0, 0, 0, 0},
     {"memory_high", "Memory usage high", "mem.usage", ALERT_ABOVE, 90, 300, TRUE, TRUE, 0, 0, 0, 0, 0},
@@ -159,10 +153,8 @@ static void send_state(Alerts *alerts, AlertRule *rule) {
 
 /* --------------------------------------------------------------- lifecycle */
 
-/* Built-ins are code-owned: the saved file may still hold ones from an older
- * version, or ones for a filesystem that has since gone away. Anything marked
- * builtin that the current build would not generate is dropped, so the default
- * set stays in step with the code and the device. */
+/* Built-ins are code-owned: saved ones from an older version or a vanished
+ * filesystem are dropped so the defaults track the code and the device. */
 static void prune_stale_builtins(Alerts *alerts, GHashTable *expected) {
     guint kept = 0;
     for (guint i = 0; i < alerts->count; i++) {

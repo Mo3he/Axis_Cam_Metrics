@@ -1,18 +1,10 @@
 /*
- * Persistence for the history tiers.
+ * Persistence for the history tiers: one fixed-size circular file per tier, so a
+ * sample costs one record write. The header index is only flushed every
+ * HEADER_FLUSH_EVERY appends, so an unclean shutdown loses the last few samples.
  *
- * Each tier gets its own file, laid out as a fixed-size circular buffer, so a
- * new sample costs one record write rather than rewriting the whole history.
- *
- * The index in the header is only flushed periodically. The finest tier writes
- * a sample every second, and rewriting a 4 KB header each time would cost more
- * than the sample itself; an unclean shutdown therefore loses the last few
- * samples of a tier rather than its whole recording.
- *
- * It deliberately never lands on flash. /mnt/flash has ~144 MB free on a
- * recorder, and even this modest write rate is wear that belongs on removable
- * storage instead. If no card or disk is present, history stays in memory and
- * the UI says so.
+ * Never written to flash (~144 MB free on a recorder, and wear belongs on
+ * removable storage); without a card or disk, history stays in memory.
  */
 
 #include "persist.h"
@@ -74,10 +66,8 @@ static gboolean fstype_is_volatile(const char *fstype) {
            strcmp(fstype, "devtmpfs") == 0 || strcmp(fstype, "vcrfs") == 0;
 }
 
-/* Each area is mounted several times. On the devices tested every mount exposes
- * the same subtree, so the paths are interchangeable, but "areas/<AREA>/root"
- * is the documented area root and is what the rest of the portfolio uses, so it
- * wins ties rather than leaving the choice to /proc/mounts ordering. */
+/* Each area is mounted several times with the same subtree; prefer the
+ * documented "areas/<AREA>/root" on ties rather than /proc/mounts order. */
 static gboolean is_area_root(const char *mountpoint) {
     return g_str_has_prefix(mountpoint, "/var/spool/storage/areas/") &&
            g_str_has_suffix(mountpoint, "/root");

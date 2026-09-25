@@ -1,6 +1,6 @@
 # Build both architectures from this single Dockerfile:
-#   docker build --build-arg ARCH=aarch64 --target package -t Metrics-aarch64 .
-#   docker build --build-arg ARCH=armv7hf --target package -t Metrics-armv7hf .
+#   docker build --build-arg ARCH=aarch64 --target package -t metrics-aarch64 .
+#   docker build --build-arg ARCH=armv7hf --target package -t metrics-armv7hf .
 #
 # Prefer ./build.sh, which does both and collects the .eap files in ./releases.
 ARG ARCH=aarch64
@@ -15,9 +15,8 @@ FROM ${SDK_REPO}/${SDK}:${SDK_VERSION}-${ARCH}-ubuntu${UBUNTU_VERSION} AS packag
 ARG ARCH
 ARG PAHO_VERSION
 
-# AXIS OS 12 ships libpaho, AXIS OS 13 does not, so it is linked statically
-# rather than resolved from the device. TLS uses the device's OpenSSL 3, which
-# is present on both and carries a real CA trust store.
+# AXIS OS 13 does not ship libpaho, so it is linked statically. TLS uses the
+# device's OpenSSL 3, present on both OS 12 and 13 with a real CA store.
 # hadolint ignore=DL3008
 RUN apt-get update && \
     apt-get install -y --no-install-recommends cmake && \

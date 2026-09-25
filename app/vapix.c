@@ -1,9 +1,6 @@
 /*
- * Minimal local VAPIX client.
- *
- * A few metrics have no /proc equivalent: named temperature sensors, fan RPM
- * and per-port PoE power all come from CGIs. AXIS OS hands ACAPs a service
- * account over D-Bus for exactly this, which avoids storing any credentials.
+ * Minimal local VAPIX client for metrics with no /proc equivalent (named
+ * sensors, fan RPM, PoE). Uses the D-Bus service account, so no stored credentials.
  */
 
 #include "vapix.h"

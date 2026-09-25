@@ -1,14 +1,11 @@
 #!/usr/bin/env sh
 #
-# Hits every endpoint on a running device and checks the shape of what comes
-# back. This is the test that would have caught the two worst bugs so far: a
-# truncated request path silently dropping series, and an undecoded query
-# string matching no metrics at all.
+# Hits every endpoint on a running device and checks the response shapes;
+# catches truncated request paths and undecoded query strings.
 #
 #   sh tests/smoke.sh 192.168.0.155 admin
 #
-# The password is read from the ACAP_PASSWORD environment variable so it never
-# appears in shell history or process listings.
+# The password comes from ACAP_PASSWORD so it stays out of history and ps.
 
 set -eu
 

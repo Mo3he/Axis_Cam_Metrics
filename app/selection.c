@@ -1,9 +1,6 @@
 /*
- * Which metrics the dashboard shows, and which leave the device.
- *
- * The two are independent: a busy NVR might chart 40 series locally but publish
- * only a handful over MQTT, or collect everything for Prometheus while keeping
- * the dashboard readable.
+ * Which metrics the dashboard shows, and which leave the device. The two are
+ * independent: charting 40 series locally need not mean publishing them all.
  */
 
 #include "selection.h"

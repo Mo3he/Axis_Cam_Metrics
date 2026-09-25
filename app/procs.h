@@ -8,8 +8,7 @@ typedef struct Procs Procs;
 Procs *procs_new(void);
 void procs_free(Procs *procs);
 
-/* Rescans /proc when the sampling window has elapsed. Cheap enough to call on
- * every sample tick. */
+/* Rescans /proc once per interval. Cheap enough to call on every sample tick. */
 void procs_tick(Procs *procs);
 
 /* Top consumers by CPU, then by memory. Caller frees. */

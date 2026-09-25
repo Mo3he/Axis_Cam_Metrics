@@ -1,9 +1,6 @@
 /*
- * Shared metric model.
- *
- * Metrics are discovered at startup (cores, interfaces, mounts, thermal zones)
- * and registered into a flat array. Every sample is then just a float vector
- * indexed by metric id, which is what makes the ring buffers cheap.
+ * Metrics are discovered at startup into a flat registry, so every sample is
+ * just a float vector indexed by registry position.
  */
 
 #ifndef METRICS_H

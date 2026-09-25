@@ -1,10 +1,9 @@
 /*
  * MQTT publishing, including Home Assistant discovery.
  *
- * paho.mqtt.c is linked statically: AXIS OS 12 ships libpaho but OS 13 does
- * not, and the device MQTT client API is missing on recorders entirely, so
- * neither can be relied on. The async client is used so a broker that is down
- * or slow never blocks the sampler; paho owns the reconnect loop.
+ * paho.mqtt.c is static: OS 13 does not ship libpaho and recorders lack the
+ * device MQTT client API. The async client keeps a down broker from blocking
+ * the sampler; paho owns the reconnect loop.
  */
 
 #include "mqtt.h"
@@ -28,7 +27,7 @@ struct Mqtt {
     gint64 last_publish;
 };
 
-/* The interface part of "net.eth1_3.rx_bps". */
+/* Metric ids are sanitized, so VLAN eth1.3 shows up as "net.eth1_3.rx_bps". */
 static gboolean interface_is_vlan(const char *id) {
     const char *start = id + strlen("net.");
     const char *end = strchr(start, '.');
@@ -37,9 +36,8 @@ static gboolean interface_is_vlan(const char *id) {
     return memchr(start, '_', (gsize)(end - start)) != NULL;
 }
 
-/* Metrics worth surfacing as Home Assistant entities by default. Publishing all
- * ~200 would bury the useful ones, and the aim here is what somebody would put
- * on a dashboard or alert on, not everything that can be measured. */
+/* Default Home Assistant entities: what somebody would put on a dashboard or
+ * alert on. Publishing everything would bury the useful ones. */
 static gboolean is_essential(const char *id, gboolean named_sensors) {
     static const char *exact[] = {"cpu.usage",       "mem.usage",     "mem.used",
                                   "load.1",          "sys.uptime",    "flash.life_used",
@@ -50,20 +48,17 @@ static gboolean is_essential(const char *id, gboolean named_sensors) {
             return TRUE;
     }
 
-    /* Named sensors read like "Optics" or "fan_rpm"; the raw kernel zones read
-     * like "rsp_thermal" and only stand in where there are no named ones. */
+    /* Raw kernel zones ("rsp_thermal") only stand in when there are no named sensors. */
     if (g_str_has_prefix(id, "sensor."))
         return TRUE;
     if (g_str_has_prefix(id, "temp."))
         return !named_sensors;
 
-    /* The internal flash and config partitions barely move and cannot be acted
-     * on; removable storage is what actually fills up. */
+    /* Internal flash and config partitions barely move; removable storage fills up. */
     if (g_str_has_prefix(id, "fs.") && g_str_has_suffix(id, ".usage"))
         return !g_str_has_prefix(id, "fs.mnt_");
 
-    /* Skipping VLAN sub-interfaces keeps an eight-port recorder from adding
-     * sixteen throughput entities nobody asked for. */
+    /* Skipping VLANs keeps an eight-port recorder from adding sixteen entities. */
     if (g_str_has_prefix(id, "net.") &&
         (g_str_has_suffix(id, ".rx_bps") || g_str_has_suffix(id, ".tx_bps")))
         return !interface_is_vlan(id);
@@ -101,10 +96,8 @@ static const char *ha_unit_for(const char *unit) {
     return unit;
 }
 
-/* Values are published in base units, because a payload whose unit changed with
- * its magnitude would break every consumer doing arithmetic on it. Home
- * Assistant converts for display instead, but only if it is told what to show;
- * without this a 3.6 TB disk reads as 3600000000000 B. */
+/* Values stay in base units so consumers can do arithmetic; this tells Home
+ * Assistant how to display them (otherwise a 3.6 TB disk reads in bytes). */
 static const char *ha_suggested_unit(const MetricDef *def) {
     if (strcmp(def->unit, "B") == 0)
         return g_str_has_prefix(def->id, "fs.") ? "GB" : "MB";
@@ -153,8 +146,7 @@ static void publish_discovery(Mqtt *mqtt, gboolean withdraw_stale) {
     for (guint i = 0; i < mqtt->api->registry->count; i++) {
         const MetricDef *def = &mqtt->api->registry->defs[i];
 
-        /* A metric that is not transmitted would give an entity that never
-         * updates, so it is treated the same as one that is not wanted. */
+        /* An untransmitted metric would give an entity that never updates. */
         gboolean wanted = selection_enabled(mqtt->api->selection, SELECT_TRANSMIT, def->id) &&
                           (mqtt->config.discovery_all || is_essential(def->id, named_sensors));
 
@@ -168,11 +160,8 @@ static void publish_discovery(Mqtt *mqtt, gboolean withdraw_stale) {
         char config_topic[256];
         g_snprintf(config_topic, sizeof(config_topic), "homeassistant/sensor/%s/config", object_id);
 
-        /* Discovery configs are retained, so one this device published before
-         * would otherwise outlive the change and leave a dead entity in Home
-         * Assistant forever. An empty retained payload removes it. Doing this
-         * only once per broker keeps a flapping connection from republishing a
-         * couple of hundred withdrawals every time it comes back. */
+        /* Retained configs would leave dead entities; an empty retained payload
+         * removes them. Only once per broker, so a flapping link cannot spam. */
         if (!wanted) {
             if (withdraw_stale) {
                 publish(mqtt, config_topic, "", 0, 1, 0);
@@ -186,8 +175,7 @@ static void publish_discovery(Mqtt *mqtt, gboolean withdraw_stale) {
         g_string_append_printf(payload, "\"unique_id\":\"axis_%s\",", object_id);
         g_string_append_printf(payload, "\"state_topic\":\"%s\",", state_topic);
         g_string_append_printf(payload, "\"availability_topic\":\"%s\",", availability_topic);
-        /* The state payload is one JSON object keyed by metric id, so every
-         * entity reads its own field out of the same retained message. */
+        /* Every entity reads its own field out of the one retained state object. */
         g_string_append_printf(payload, "\"value_template\":\"{{ value_json['%s'] }}\",", def->id);
         if (def->unit[0])
             g_string_append_printf(payload, "\"unit_of_measurement\":\"%s\",", ha_unit_for(def->unit));
@@ -311,10 +299,8 @@ static void connect_now(Mqtt *mqtt) {
     options.minRetryInterval = CONNECT_RETRY_MIN_S;
     options.maxRetryInterval = CONNECT_RETRY_MAX_S;
     options.context = mqtt;
-    /* MQTT forbids a password without a username, and a broker answers one with
-     * a protocol-level disconnect that looks exactly like an unreachable host.
-     * A stored password with the username cleared is an easy state to end up
-     * in, so the password is only offered alongside a username. */
+    /* MQTT forbids a password without a username, and brokers answer it with a
+     * disconnect that looks like an unreachable host. */
     if (mqtt->config.username[0]) {
         options.username = mqtt->config.username;
         if (mqtt->config.password[0])
@@ -323,8 +309,7 @@ static void connect_now(Mqtt *mqtt) {
         syslog(LOG_WARNING, "mqtt password ignored: the broker also needs a username");
     }
 
-    /* The broker publishes this if the device drops off without saying goodbye,
-     * which is what makes the Home Assistant availability topic meaningful. */
+    /* Makes the Home Assistant availability topic meaningful on an ungraceful drop. */
     MQTTAsync_willOptions will = MQTTAsync_willOptions_initializer;
     will.topicName = status_topic;
     will.message = "offline";
@@ -346,8 +331,7 @@ static void connect_now(Mqtt *mqtt) {
 
 void mqtt_apply(Mqtt *mqtt, const MqttConfig *config) {
     gboolean reconnect = connection_differs(&mqtt->config, config) || !mqtt->client;
-    /* Discovery is otherwise only published on connect, so changing what should
-     * be discovered would appear to do nothing until the broker dropped us. */
+    /* Discovery is otherwise only published on connect. */
     gboolean rediscover = !reconnect && mqtt->connected && config->discovery &&
                           (config->discovery != mqtt->config.discovery ||
                            config->discovery_all != mqtt->config.discovery_all);

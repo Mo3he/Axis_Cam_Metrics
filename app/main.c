@@ -1,14 +1,9 @@
 /*
  * Metrics Dashboard ACAP entry binary.
  *
- * Owns the parameter store entries, samples the device on a timer into the
- * tiered history store, and serves the full API on 127.0.0.1:2207 and a
- * read-only copy on 127.0.0.1:2209. The camera's reverse proxy exposes those
- * as /local/Metrics/api/... (admin) and /local/Metrics/data/... (viewer), so
- * no additional port is opened on the network.
- *
- * The loopback port must be unique across all ACAPs that may run on the same
- * device; see PARAM_CGI_FALLBACK.md for the registry.
+ * Serves the full API on 127.0.0.1:2207 (proxied as /local/Metrics/api, admin)
+ * and a read-only copy on 127.0.0.1:2209 (/local/Metrics/data, viewer). Ports
+ * must be unique across ACAPs; see PARAM_CGI_FALLBACK.md for the registry.
  */
 
 #include <axsdk/axparameter.h>
@@ -44,8 +39,7 @@
  * asking, so the port itself is what makes these requests read-only. */
 #define VIEWER_HTTP_PORT   2209
 #define MAX_REQUEST        16384
-/* A series request names every metric it wants, so the path is far longer than
- * a typical URL. */
+/* A series request names every metric it wants, so paths get long. */
 #define MAX_PATH_LENGTH    8192
 
 typedef struct {
@@ -106,7 +100,7 @@ static Parameter *find_parameter(const char *name) {
     return NULL;
 }
 
-/* Parameter callbacks report a qualified name such as root.Metrics.Enabled. */
+/* Parameter callbacks report a qualified name such as root.Metrics.SampleInterval. */
 static Parameter *find_parameter_suffix(const char *qualified_name) {
     const char *last = strrchr(qualified_name, '.');
     return find_parameter(last ? last + 1 : qualified_name);
@@ -149,10 +143,8 @@ static void on_alert_changed(const AlertRule *rule, gboolean firing, gpointer us
     mqtt_publish_alert(mqtt, rule->id, rule->name, rule->metric, rule->last_value, firing);
 }
 
-/* Storage is not necessarily mounted when an ACAP starts at boot: on a recorder
- * the app came up more than an hour before the disk appeared, and a one-shot
- * probe left history in memory for the whole run. Retrying also means an SD
- * card inserted later starts being used without a restart. */
+/* Storage can mount long after boot (over an hour on a recorder) or be inserted
+ * later, so opening it is retried. */
 #define PERSIST_RETRY_S 30
 
 /* One file per tier. The coarse tier keeps the original name so an existing
@@ -181,9 +173,8 @@ static gboolean try_open_persistence(gpointer user_data) {
     if (persists[STORE_TIERS - 1])
         return G_SOURCE_REMOVE;
 
-    /* Checked before opening: a disk appearing usually means filesystem metrics
-     * are missing too, and opening the history only to close it again during
-     * the rebuild would rewrite its header. */
+    /* Checked first: a new disk also needs a rebuild, and opening the history
+     * only to close it again would rewrite its header. */
     if (collector_mounts_changed(collector)) {
         persist_retry_timer = 0;
         rebuild_for_new_storage();
@@ -197,9 +188,8 @@ static gboolean try_open_persistence(gpointer user_data) {
             return G_SOURCE_CONTINUE;
         }
 
-        /* Only adopt the saved history when nothing has been recorded yet.
-         * Replaying older samples on top of newer ones would put the tier out
-         * of order, and after a late mount a tier is usually still empty. */
+        /* Replaying older samples on top of newer ones would put the tier out
+         * of order, so saved history is only adopted by an empty tier. */
         if (store_tier_count(store, i) == 0)
             persist_load(persists[i], store, i);
 
@@ -212,12 +202,8 @@ static gboolean try_open_persistence(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
-/* Rebuilding is the only way to pick up a filesystem that mounted after the
- * metric registry was built, and the registry's size is baked into the store
- * and the sample buffer. It is rare: only when the mount set actually changes,
- * which in practice means a disk appearing at boot or a card being inserted.
- * The coarse history is reloaded from disk afterwards and remaps by metric id,
- * so nothing durable is lost. */
+/* The registry size is baked into the store and sample buffer, so a new mount
+ * needs a full rebuild. History is reloaded from disk and remapped by id. */
 static void rebuild_for_new_storage(void) {
     syslog(LOG_INFO, "storage changed, rediscovering metrics");
 
@@ -484,9 +470,8 @@ static void send_json(GOutputStream *out, gchar *json) {
 
 /* ---------------------------------------------------------- event stream */
 
-/* Connections held open for server-sent events. The listener is synchronous,
- * so these sockets are non-blocking: a client that cannot keep up misses
- * frames rather than stalling the sampler. */
+/* The listener is synchronous, so SSE sockets are non-blocking: a slow client
+ * misses frames rather than stalling the sampler. */
 typedef struct {
     GSocketConnection *connection;
     guint stalled; /* Consecutive frames the client had no room for. */
@@ -494,8 +479,7 @@ typedef struct {
 
 static GList *sse_clients;
 
-/* A reader that never drains its socket would otherwise sit here forever,
- * since a full buffer looks the same as a slow client. */
+/* A full buffer looks the same as a slow client, so a dead reader is dropped. */
 #define SSE_MAX_STALLED 30
 
 static void sse_drop(SseClient *client) {

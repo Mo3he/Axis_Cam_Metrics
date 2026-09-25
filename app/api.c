@@ -1,8 +1,6 @@
 /*
- * JSON rendering for the read-only metric endpoints.
- *
- * Everything is hand-rolled rather than pulled from a JSON library: the app
- * only ever writes JSON, and the shapes are small and fixed.
+ * JSON and Prometheus rendering for the metric endpoints. Hand-rolled because
+ * the response shapes are small and fixed.
  */
 
 #include "api.h"
@@ -75,8 +73,7 @@ static void read_param(AXParameter *handle, const char *name, char *out, gsize l
     g_clear_error(&error);
 }
 
-/* Reads through parhand rather than VAPIX, which is the only way that also
- * works on OS 13 recorders where param.cgi is gone. */
+/* Reads through parhand rather than VAPIX: param.cgi is gone on OS 13 recorders. */
 void api_read_device_info(DeviceInfo *info, void *parameter_handle) {
     AXParameter *handle = parameter_handle;
     memset(info, 0, sizeof(*info));
@@ -297,8 +294,7 @@ gchar *api_series_json(const Api *api, const char *query) {
 
         guint n = store_series(api->store, tier_index, i, since, timestamps, values, MAX_SERIES_POINTS);
 
-        /* Every metric shares one sample clock, so the timestamps are emitted
-         * once instead of per series. */
+        /* Every metric shares one sample clock, so timestamps are emitted once. */
         if (!shared_timestamps && n > 0) {
             shared_timestamps = g_memdup2(timestamps, n * sizeof(gint64));
             shared_count = n;
@@ -360,8 +356,8 @@ static const char *unit_suffix(const char *unit) {
     return "";
 }
 
-/* Per-device ids like net.eth0.rx_bps become a single metric name with a label,
- * which is what makes them aggregatable in PromQL. */
+/* Per-device ids like net.eth0.rx_bps become one metric name with a label, so
+ * they aggregate in PromQL. */
 static const char *label_key_for(const char *group_prefix) {
     if (strcmp(group_prefix, "net") == 0) return "interface";
     if (strcmp(group_prefix, "disk") == 0) return "device";
@@ -420,8 +416,7 @@ gchar *api_prometheus_text(const Api *api) {
                            "axis_device_info{model=\"%s\",serial=\"%s\",firmware=\"%s\"} 1\n",
                            api->device.model, api->device.serial, api->device.firmware);
 
-    /* HELP/TYPE must appear once per name, but several ids share a name once
-     * the device part becomes a label, so emitted names are tracked. */
+    /* HELP/TYPE must appear once per name, and several ids share a name. */
     GHashTable *declared = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 
     for (guint i = 0; i < api->registry->count; i++) {

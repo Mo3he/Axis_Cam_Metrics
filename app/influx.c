@@ -1,14 +1,8 @@
 /*
- * InfluxDB writer.
+ * InfluxDB line protocol writer for 1.x (/write?db=) or 2.x (/api/v2/write).
  *
- * Speaks line protocol to either a 1.x server (/write?db=) or a 2.x server
- * (/api/v2/write?org=&bucket=), chosen by a setting, because both are still
- * widely deployed and the payload is identical either way.
- *
- * curl blocks, and a broker that stops answering would otherwise stall the
- * sampler and with it the whole UI, so the request runs on a worker thread. The
- * queue holds a single payload: metrics are a live view, and a stale sample is
- * worth less than the next one.
+ * curl blocks, so writes run on a worker thread to keep a hung server from
+ * stalling the sampler. Only the newest payload is queued.
  */
 
 #include "influx.h"
@@ -48,8 +42,7 @@ const char *influx_state(const Influx *influx) {
 
 /* ------------------------------------------------------------ line protocol */
 
-/* Tag keys and values, and field keys, escape commas, equals signs and spaces.
- * Metric ids never contain them, but the model and serial can. */
+/* Line protocol escaping for tags and field keys; the model and serial may need it. */
 static void append_escaped_tag(GString *out, const char *value) {
     for (const char *c = value ? value : ""; *c; c++) {
         if (*c == ',' || *c == '=' || *c == ' ' || *c == '\\')
@@ -66,9 +59,7 @@ static void append_escaped_measurement(GString *out, const char *value) {
     }
 }
 
-/* One line carrying every transmitted metric as a field. Splitting per metric
- * would multiply the tag set by a hundred for no gain: they all share the same
- * timestamp and device. */
+/* One line with every metric as a field: they all share a timestamp and tag set. */
 static gchar *build_payload(Influx *influx) {
     const Api *api = influx->api;
     float *values = g_new(float, api->registry->count);
@@ -205,8 +196,7 @@ static gpointer worker_main(gpointer user_data) {
         if (payload == (gchar *)QUIT)
             break;
 
-        /* Copied under the lock because settings can change while we block on
-         * the network. */
+        /* Settings can change while we block on the network. */
         g_mutex_lock(&influx->state_lock);
         InfluxConfig config = influx->config;
         g_mutex_unlock(&influx->state_lock);
@@ -275,8 +265,8 @@ void influx_tick(Influx *influx) {
         return;
     influx->last_write = now;
 
-    /* A payload still queued means the previous write has not finished. Drop it
-     * so a slow server cannot build a backlog of stale samples. */
+    /* A queued payload means the last write is still running; drop it so a slow
+     * server cannot build a backlog. */
     gchar *stale;
     while ((stale = g_async_queue_try_pop(influx->queue)))
         g_free(stale);

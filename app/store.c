@@ -1,7 +1,6 @@
 /*
- * Three fixed-size ring buffers: a fine tier for the live view, a medium tier
- * for a day, and a coarse tier for a month. Coarse tiers are fed by averaging
- * the fine samples that land in each bucket, so a push is O(n_metrics).
+ * Three fixed-size ring buffers: fine (live view), medium (12 h) and coarse
+ * (30 days). Coarser tiers average the samples that land in each bucket.
  */
 
 #include "store.h"
@@ -11,10 +10,8 @@
 #include <string.h>
 #include <syslog.h>
 
-/* 30 minutes, 12 hours and 30 days at the tier intervals below.
- * The medium tier stops at 12 h on purpose: store_tier_for_window caps a chart
- * at ~2000 points, so nothing ever reads more than ~8 h of 15 s samples and a
- * 24 h buffer here would just be resident memory nobody queries. */
+/* 30 minutes, 12 hours and 30 days. Charts cap at ~2000 points, so nothing reads
+ * more than ~8 h of 15 s samples and a longer medium tier would be wasted RAM. */
 static const guint TIER_INTERVAL[STORE_TIERS] = {1, 15, 300};
 static const guint TIER_CAPACITY[STORE_TIERS] = {1800, 2880, 8640};
 static const guint TIER_MIN_CAPACITY[STORE_TIERS] = {300, 720, 576};
@@ -53,8 +50,7 @@ Store *store_new(const MetricRegistry *registry, guint base_interval_s) {
     for (guint i = 0; i < STORE_TIERS; i++)
         capacity[i] = TIER_CAPACITY[i];
 
-    /* The fine tier is sampled at the configured interval, so a slower sample
-     * rate buys a longer window rather than more memory. */
+    /* A slower sample rate buys a longer fine window rather than more memory. */
     guint fine_interval = MAX(1, base_interval_s);
     capacity[0] = MAX(TIER_MIN_CAPACITY[0], TIER_CAPACITY[0] / fine_interval);
 

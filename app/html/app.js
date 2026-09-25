@@ -1,8 +1,5 @@
-/* Metrics Dashboard UI.
- *
- * Panels are derived from whatever the device actually reported in /meta, so
- * the same page renders correctly on a camera (SD card, image sensor thermals)
- * and on a recorder (SATA disk, eight PoE port VLANs).
+/* Metrics Dashboard UI. Panels are derived from what the device reported in
+ * /meta, so one page fits both cameras and recorders.
  */
 (function () {
   "use strict";
@@ -51,9 +48,8 @@
       "Theme: " + THEME_LABELS[theme] + ". Click to change.";
   }
 
-  /* Lives in the header rather than the settings dialog: the theme is a per
-   * browser preference, so it should not need the admin rights that opening
-   * settings does. */
+  /* In the header rather than settings: theme is per browser and must not need
+   * admin rights. */
   function setupTheme() {
     showTheme(currentTheme());
     document.getElementById("theme-toggle").addEventListener("click", function () {
@@ -67,8 +63,8 @@
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
-  /* uPlot paints the axes on a canvas, so it cannot inherit the CSS colours and
-   * would otherwise draw near-black text on a dark panel. */
+  /* uPlot paints axes on a canvas, so it cannot inherit the CSS colours and
+   * would draw near-black text on a dark panel. */
   function chartTheme() {
     return { axis: cssVar("--muted"), grid: cssVar("--grid") };
   }
@@ -110,12 +106,8 @@
     return n < 10 ? "0" + n : String(n);
   }
 
-  /* uPlot's default time axis prints 12-hour labels and drops a second row
-   * carrying the date, which reads as a stray number under the plot. These
-   * labels key off the tick interval uPlot actually chose rather than the
-   * requested window: a 7 day view holding one hour of data wants clock times,
-   * not the same date repeated six times. Hovering gives the full timestamp,
-   * so the ticks stay short enough not to collide. */
+  /* uPlot's default axis is 12-hour with a stray date row. Labels key off the
+   * tick interval uPlot chose, not the window, since a 7d view may hold 1h of data. */
   function axisTimeLabels(splits, incr) {
     return splits.map(function (seconds) {
       var d = new Date(seconds * 1000);
@@ -175,8 +167,7 @@
     return displayable().some(function (m) { return m.id === id; });
   }
 
-  /* Metrics the user switched off are still collected and exported; they are
-   * simply not charted. */
+  /* Switched-off metrics are still collected and exported, just not charted. */
   function displayable() {
     return meta.metrics.filter(function (m) { return m.display !== false; });
   }
@@ -236,8 +227,8 @@
     var swap = pick(["mem.swap_usage"], ["swap used"]);
     if (swap.length && hasId("mem.swap_total")) specs.push({ title: "Swap", unit: "%", max: 100, series: swap });
 
-    /* Both the raw thermal zones and the named CGI sensors land in this group;
-     * driving off the unit keeps fan RPM and heater state out of it. */
+    /* Thermal zones and named sensors share this group; filtering on the unit
+     * keeps fan RPM and heater state out. */
     var temps = byUnit("temperature", "C").map(function (m) {
       return { id: m.id, label: m.id.replace(/^(temp|sensor)\./, "").replace(/_/g, " ") };
     });
@@ -320,8 +311,7 @@
           }
         }
       ],
-      /* uPlot formats the time series legend itself and ignores a function
-       * here, so it takes a date template. {HH} is 24-hour, {h} would be 12. */
+      /* uPlot formats the time legend itself and ignores a function here; {HH} is 24-hour. */
       series: [{ label: "Time", value: "{YYYY}-{MM}-{DD} {HH}:{mm}:{ss}" }].concat(
         spec.series.map(function (s, i) {
           return {
@@ -426,7 +416,7 @@
         html += card("Memory", fmtPercent(v["mem.usage"]),
           fmtBytes(v["mem.used"]) + " of " + fmtBytes(v["mem.total"]), severityFor(v["mem.usage"]));
 
-        /* Report the hottest sensor: which one is hottest varies by product. */
+        /* The hottest thermal zone varies by product. */
         var hottest = null;
         var hottestName = "";
         Object.keys(v).forEach(function (id) {
@@ -437,10 +427,8 @@
         });
         if (hottest != null) html += card("Temperature", fmtTemp(hottest), hottestName);
 
-        /* Headline on the biggest filesystem, which is the SD card or recording
-         * disk. Picking the fullest instead would point at internal flash on a
-         * recorder, which is not the storage anyone means. Every filesystem is
-         * still charted below. */
+        /* The biggest filesystem is the SD card or recording disk; the fullest
+         * would be internal flash on a recorder. */
         var biggest = null;
         var biggestName = "";
         Object.keys(v).forEach(function (id) {
@@ -475,8 +463,8 @@
             severityFor(v["poe.budget"] ? (100 * v["poe.total"]) / v["poe.budget"] : null));
         }
 
-        /* Wear only moves over years, so it is a status readout rather than a
-         * chart. pre_eol 1 is normal; 2 and 3 mean the card is wearing out. */
+        /* Wear moves over years, so no chart. pre_eol 1 is normal; 2 and 3 mean
+         * the card is wearing out. */
         if (v["flash.life_used"] != null) {
           var eol = v["flash.pre_eol"];
           html += card("Flash wear", fmtPercent(v["flash.life_used"]),
@@ -590,8 +578,7 @@
       if (CHECKBOXES.indexOf(field.name) >= 0) {
         body.set(field.name, field.checked ? "yes" : "no");
       } else if (field.name === "MqttPassword") {
-        /* Empty means "leave the stored password alone", since the API never
-         * returns it to prefill the field. */
+        /* Empty keeps the stored password; the API never returns it. */
         if (field.value) body.set(field.name, field.value);
       } else {
         body.set(field.name, field.value);
@@ -674,9 +661,8 @@
     pill.className = "pill" + (state === "connected" ? " live" : state === "error" || state === "unauthorized" ? " error" : "");
   }
 
-  /* 1.x authenticates with a username and password against a database, 2.x with
-   * a token against an organisation's bucket. Showing both at once invites
-   * filling in the pair that is ignored. */
+  /* 1.x uses user/password and a database, 2.x a token and bucket; hide the
+   * pair that would be ignored. */
   function applyInfluxVersion() {
     var form = settingsForm();
     var v2 = form.elements.InfluxVersion.value !== "v1";
@@ -745,8 +731,7 @@
     return found ? found.unit : "";
   }
 
-  /* Built once and reused: with a couple of hundred metrics on a recorder,
-   * rebuilding the option list for every rule is wasted work. */
+  /* Cached: a recorder has a couple of hundred metrics. */
   function metricOptions() {
     if (metricOptionsHtml !== null) return metricOptionsHtml;
     var groups = {};
@@ -794,8 +779,8 @@
 
     var metric = row.querySelector('[data-field="metric"]');
     metric.value = rule.metric;
-    /* A rule can outlive the metric it watches, for instance a card that was
-     * removed, and silently retargeting it would be worse than showing it. */
+    /* A rule can outlive its metric (card removed); show it rather than
+     * silently retargeting. */
     if (rule.metric && metric.value !== rule.metric) {
       metric.insertAdjacentHTML("afterbegin",
         '<option value="' + escapeHtml(rule.metric) + '">' + escapeHtml(rule.metric) +
@@ -845,8 +830,7 @@
     });
   }
 
-  /* Posted one at a time: each request rewrites the whole rules file, so
-   * overlapping writes would race for it. */
+  /* Sequential: each request rewrites the whole rules file. */
   function saveRules() {
     var work = deletedRules.map(function (id) {
       return function () { return postRule(new URLSearchParams({ action: "delete", id: id })); };

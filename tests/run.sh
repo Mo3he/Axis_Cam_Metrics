@@ -1,7 +1,6 @@
 #!/usr/bin/env sh
 #
-# Runs the unit tests natively on the build host. The store and metric registry
-# are plain C with only glib, so they need no cross-compiler or device.
+# Runs the unit tests natively; the store and registry need only glib.
 #
 #   sh tests/run.sh
 
@@ -11,8 +10,7 @@ cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
 CC=${CC:-cc}
 
-# CI has pkg-config; a Homebrew machine often does not, but does have the .pc
-# file, so fall back to the cellar prefix rather than failing.
+# Homebrew often lacks pkg-config but has the .pc file, so fall back to its prefix.
 if command -v pkg-config >/dev/null 2>&1; then
 	GLIB_CFLAGS=$(pkg-config --cflags glib-2.0)
 	GLIB_LIBS=$(pkg-config --libs glib-2.0)

@@ -1,9 +1,7 @@
 /*
- * Unit tests for the parts that fail silently.
- *
- * A bug in tier downsampling or in the persistence id-remap produces plausible
- * but wrong numbers rather than a crash, so those are the two things worth
- * pinning down. Build and run with tests/run.sh.
+ * Unit tests for store downsampling, window-to-tier selection and series
+ * queries, which fail with plausible wrong numbers rather than crashes.
+ * Build and run with tests/run.sh.
  */
 
 #include "../app/metrics.h"
@@ -61,12 +59,10 @@ static void test_downsampling(void) {
     CHECK(store_tier_count(store, 1) >= 1, "medium tier produced a bucket");
 
     if (store_tier_sample(store, 1, 0, row, &timestamp)) {
-        /* The first bucket closes at +15s, averaging the fifteen 10s and the
-         * first 20 that triggered the flush. */
+        /* Closes at +15s: fifteen 10s plus the first 20 that triggered the flush. */
         CHECK(row[0] > 10.0 && row[0] <= 11.0, "bucket mean sits between the two levels (%.3f)", row[0]);
     }
 
-    /* NaN must be skipped, not treated as zero. */
     Store *sparse = store_new(&registry, 1);
     for (int i = 0; i < 20; i++) {
         float values[2] = {i % 2 ? 100.0f : NAN, 0.0f};
@@ -100,7 +96,6 @@ static void test_window_selection(void) {
     metrics_registry_clear(&registry);
 }
 
-/* A series must survive the metric set changing shape between runs. */
 static void test_series_query(void) {
     printf("series query\n");
 

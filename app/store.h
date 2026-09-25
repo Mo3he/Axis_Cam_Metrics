@@ -7,8 +7,8 @@
 
 #define STORE_TIERS 3
 
-/* Fires when a tier emits a downsampled sample. Invoked outside the store lock
- * so a slow listener (a disk write) cannot stall the sampler. */
+/* Fires when a tier appends a sample. Invoked outside the store lock so a slow
+ * listener (a disk write) cannot stall the sampler. */
 typedef void (*StoreTierCallback)(const float *values, gint64 timestamp, gpointer user_data);
 
 typedef struct {
@@ -39,15 +39,13 @@ typedef struct {
     gboolean has_latest;
 } Store;
 
-/* Capacities are scaled down on low-memory devices; the resulting sizes are
- * logged at startup. */
+/* Capacities are scaled down on low-memory devices and logged at startup. */
 Store *store_new(const MetricRegistry *registry, guint base_interval_s);
 void store_free(Store *store);
 
 const MetricRegistry *store_registry(const Store *store);
 
-/* Appends straight into one tier, bypassing the downsampling accumulator.
- * Used to replay saved history at startup. */
+/* Appends straight into one tier, bypassing downsampling. Used to replay saved history. */
 void store_restore(Store *store, guint tier_index, const float *values, gint64 timestamp);
 
 /* Reads one whole sample row, oldest first. Returns FALSE past the end. */
@@ -61,11 +59,10 @@ void store_push(Store *store, const float *values, gint64 timestamp);
 /* Copies the most recent sample. Returns FALSE before the first push. */
 gboolean store_latest(Store *store, float *out, gint64 *timestamp);
 
-/* Picks the coarsest tier that still resolves the window. */
+/* Picks the finest tier with at most ~2000 points, else the coarsest tier. */
 guint store_tier_for_window(const Store *store, guint window_s);
 
-/* Writes up to max_points samples for one metric, oldest first. Returns the
- * number written. */
+/* Writes up to max_points samples for one metric, oldest first. Returns the count. */
 guint store_series(Store *store,
                    guint tier_index,
                    guint metric_index,

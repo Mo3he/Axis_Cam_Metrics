@@ -36,7 +36,7 @@ gchar *alerts_json(Alerts *alerts);
 /* Applies one form-encoded change: action=save|delete plus rule fields. */
 gboolean alerts_apply(Alerts *alerts, const char *body);
 
-/* Set to receive a one-line summary whenever a rule changes state. */
+/* Called whenever a rule starts or stops firing. */
 typedef void (*AlertNotify)(const AlertRule *rule, gboolean firing, gpointer user_data);
 void alerts_set_notify(Alerts *alerts, AlertNotify notify, gpointer user_data);
 

@@ -1,12 +1,6 @@
 /*
- * Per-process CPU and memory, for answering "what is using the camera".
- *
- * CPU percentage only exists as a difference between two readings, so the
- * table is refreshed on a fixed cadence and each entry reports its share of the
- * whole device over that interval. That matches cpu.usage, which is also an
- * average across cores: a process cannot read 53% on a box the dashboard calls
- * 27% busy. A process that appeared since the last scan has no baseline and
- * reports zero rather than a misleading spike.
+ * Per-process CPU and memory. CPU is a share of the whole device over the scan
+ * interval, matching cpu.usage; a new process has no baseline and reports zero.
  */
 
 #include "procs.h"
@@ -63,9 +57,8 @@ static Proc *find(Procs *procs, int pid) {
     return NULL;
 }
 
-/* /proc/<pid>/stat cannot be split on spaces because the second field is a
- * command name in parentheses that may itself contain spaces and brackets. The
- * numeric fields all follow the last ')'. */
+/* The command name in field 2 may contain spaces and brackets, so the numeric
+ * fields are parsed after the last ')'. */
 static gboolean read_stat(const char *path, char *name, gsize name_len, gulong *jiffies,
                           gulong *rss_pages) {
     gchar *contents = NULL;
@@ -86,9 +79,8 @@ static gboolean read_stat(const char *path, char *name, gsize name_len, gulong *
     name[length] = '\0';
 
     gulong utime = 0, stime = 0, rss = 0;
-    /* Counting from the state in field 3: utime and stime are 14 and 15, rss is
-     * 24. Skipped fields are matched as plain tokens because gcc rejects a
-     * length modifier on a suppressed conversion. */
+    /* From field 3: utime/stime are 14/15, rss is 24. Plain %*s because gcc
+     * rejects a length modifier on a suppressed conversion. */
     int matched = sscanf(close_paren + 2,
                          "%*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %lu %lu "
                          "%*s %*s %*s %*s %*s %*s %*s %*s %lu",
@@ -144,8 +136,7 @@ static void scan(Procs *procs, double elapsed_s) {
     }
     g_dir_close(dir);
 
-    /* Drop the processes that exited, so their pids can be reused without
-     * inheriting a stale baseline. */
+    /* Drop exited processes so a reused pid does not inherit a stale baseline. */
     guint kept = 0;
     for (guint i = 0; i < procs->count; i++) {
         if (procs->entries[i].seen)

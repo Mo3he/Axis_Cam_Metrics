@@ -1,10 +1,7 @@
 /*
- * Reads metrics straight from /proc and /sys. Nothing here talks to VAPIX, so
- * a sample costs a handful of small reads and no round trips.
- *
- * Availability differs a lot between products (a camera has 6 thermal zones and
- * an SD card, a recorder has 5 zones, a SATA disk and 8 PoE port VLANs), so
- * everything is discovered at startup rather than assumed.
+ * Fast metrics come from /proc and /sys; slow ones (named sensors, PoE) come from
+ * VAPIX CGIs on their own cadence. Availability differs a lot between products,
+ * so everything is discovered at startup rather than assumed.
  */
 
 #include "collect.h"
@@ -108,7 +105,7 @@ struct Collector {
     guint idx_flash_life, idx_flash_eol;
     char flash_life_path[160], flash_eol_path[160];
 
-    /* Holds the last CGI-backed readings so every sample carries them. */
+    /* Holds the last slow readings so every sample carries them. */
     float *slow_cache;
     gboolean *is_slow;
     gint64 slow_deadline;
@@ -316,10 +313,8 @@ static void discover_disks(Collector *c) {
     fclose(f);
 }
 
-/* Each storage area is mounted several times (plain, areas/<x>/root and the
- * /var/volatile duplicates). Keep the first, shortest, non-volatile one.
- * Read-only mounts are skipped: the root filesystem sits at 100% by design on
- * every Axis device, so charting it is noise. */
+/* Each storage area is mounted several times; callers keep the first mount per
+ * device. Read-only mounts are skipped: the root filesystem is always 100% full. */
 static gboolean mount_is_interesting(const char *device,
                                      const char *mountpoint,
                                      const char *fstype,
@@ -396,9 +391,8 @@ static void discover_mounts(Collector *c) {
 
 /* ------------------------------------------------- slow, CGI-backed sources */
 
-/* temperaturecontrol.cgi reports key=value lines with product-specific sensor
- * names (CPU, Optics, IR on a camera; Disk, CPU on a recorder) plus fan and
- * heater state, none of which /sys exposes by name. */
+/* temperaturecontrol.cgi names sensors per product (Optics, IR on a camera; Disk
+ * on a recorder) and reports fan and heater state, none of which /sys exposes. */
 static void discover_sensors(Collector *c) {
     gchar *body = vapix_get("temperaturecontrol.cgi");
     if (!body)
@@ -494,7 +488,7 @@ static void discover_poe(Collector *c) {
     g_free(body);
 }
 
-/* Extracts the text of the first <tag> at or after cursor. */
+/* Parses the number in the first <tag> at or after cursor. */
 static double xml_value(const char *cursor, const char *tag) {
     char open[32];
     g_snprintf(open, sizeof(open), "<%s>", tag);
@@ -828,8 +822,7 @@ static void sample_ifaces(Collector *c, float *values, double seconds, gboolean 
         iface->prev_rx_pkts = rxp;
         iface->prev_tx_pkts = txp;
 
-        /* Error and drop counters are reported as absolute totals: they are rare
-         * enough that the running total is more useful than a rate. */
+        /* Rare enough that a running total is more useful than a rate. */
         set(values, iface->idx_rx_err, (double)rxe);
         set(values, iface->idx_tx_err, (double)txe);
         set(values, iface->idx_rx_drop, (double)rxd);
