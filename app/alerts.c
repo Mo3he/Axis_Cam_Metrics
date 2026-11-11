@@ -288,14 +288,6 @@ void alerts_evaluate(Alerts *alerts, const float *values) {
 
 /* --------------------------------------------------------------------- api */
 
-static void append_escaped(GString *out, const char *value) {
-    for (const char *c = value ? value : ""; *c; c++) {
-        if (*c == '"' || *c == '\\')
-            g_string_append_c(out, '\\');
-        g_string_append_c(out, *c);
-    }
-}
-
 gchar *alerts_json(Alerts *alerts) {
     GString *out = g_string_new("{\"rules\":[");
     guint firing = 0;
@@ -306,18 +298,20 @@ gchar *alerts_json(Alerts *alerts) {
             firing++;
         g_string_append(out, i ? ",{" : "{");
         g_string_append(out, "\"id\":\"");
-        append_escaped(out, rule->id);
+        api_append_json_escaped(out, rule->id);
         g_string_append(out, "\",\"name\":\"");
-        append_escaped(out, rule->name);
+        api_append_json_escaped(out, rule->name);
         g_string_append(out, "\",\"metric\":\"");
-        append_escaped(out, rule->metric);
+        api_append_json_escaped(out, rule->metric);
+        g_string_append_printf(out, "\",\"op\":\"%s\",\"threshold\":", op_name(rule->op));
+        api_append_json_number(out, rule->threshold);
         g_string_append_printf(out,
-                               "\",\"op\":\"%s\",\"threshold\":%g,\"duration\":%u,"
-                               "\"enabled\":%s,\"builtin\":%s,\"firing\":%s,"
-                               "\"value\":%g,\"since\":%" G_GINT64_FORMAT "}",
-                               op_name(rule->op), rule->threshold, rule->duration_s,
-                               rule->enabled ? "true" : "false", rule->builtin ? "true" : "false",
-                               rule->firing ? "true" : "false", rule->last_value, rule->fired_at);
+                               ",\"duration\":%u,\"enabled\":%s,\"builtin\":%s,\"firing\":%s,"
+                               "\"value\":",
+                               rule->duration_s, rule->enabled ? "true" : "false",
+                               rule->builtin ? "true" : "false", rule->firing ? "true" : "false");
+        api_append_json_number(out, rule->last_value);
+        g_string_append_printf(out, ",\"since\":%" G_GINT64_FORMAT "}", rule->fired_at);
     }
     g_string_append_printf(out, "],\"firing\":%u}", firing);
 
@@ -330,12 +324,34 @@ static gchar *field(const char *body, const char *name) {
     return api_query_param(body, name);
 }
 
+/* Ids become key file groups and event topic names, so they are kept to a safe
+ * alphabet rather than escaped for each. */
+static gboolean rule_id_is_valid(const char *id) {
+    gsize length = strlen(id);
+    if (length == 0 || length >= sizeof(((AlertRule *)NULL)->id))
+        return FALSE;
+    for (const char *c = id; *c; c++) {
+        if (!g_ascii_isalnum(*c) && *c != '_' && *c != '-')
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static void undeclare_rule(Alerts *alerts, AlertRule *rule) {
+    if (!alerts->events || !rule->declaration)
+        return;
+    ax_event_handler_undeclare(alerts->events, rule->declaration, NULL);
+    rule->declaration = 0;
+}
+
 gboolean alerts_apply(Alerts *alerts, const char *body) {
     gchar *action = field(body, "action");
     gchar *id = field(body, "id");
     gboolean changed = FALSE;
 
-    if (!action || !id) {
+    if (!action || !id || !rule_id_is_valid(id)) {
+        if (id)
+            syslog(LOG_WARNING, "rejected alert rule with invalid id");
         g_free(action);
         g_free(id);
         return FALSE;
@@ -346,6 +362,7 @@ gboolean alerts_apply(Alerts *alerts, const char *body) {
         /* Built-ins can be disabled but not removed, so a product's default
          * cover cannot be lost by accident. */
         if (rule && !rule->builtin) {
+            undeclare_rule(alerts, rule);
             guint index = (guint)(rule - alerts->rules);
             memmove(&alerts->rules[index], &alerts->rules[index + 1],
                     (alerts->count - index - 1) * sizeof(AlertRule));
@@ -372,18 +389,31 @@ gboolean alerts_apply(Alerts *alerts, const char *body) {
         gchar *threshold = field(body, "threshold");
         gchar *duration = field(body, "duration");
         gchar *enabled = field(body, "enabled");
+        gchar *previous_name = g_strdup(rule->name);
 
         if (name) g_strlcpy(rule->name, name, sizeof(rule->name));
         if (metric && !rule->builtin) g_strlcpy(rule->metric, metric, sizeof(rule->metric));
         if (op) rule->op = op_from(op);
-        if (threshold) rule->threshold = g_ascii_strtod(threshold, NULL);
+        if (threshold) {
+            double parsed = g_ascii_strtod(threshold, NULL);
+            if (isfinite(parsed))
+                rule->threshold = parsed;
+        }
         if (duration) rule->duration_s = (guint)g_ascii_strtoull(duration, NULL, 10);
         if (enabled) rule->enabled = g_strcmp0(enabled, "yes") == 0;
         if (!rule->name[0]) g_strlcpy(rule->name, rule->id, sizeof(rule->name));
 
-        declare_rule(alerts, rule);
+        /* The event's nice name is fixed at declaration, so a rename redeclares. */
+        if (g_strcmp0(previous_name, rule->name) != 0)
+            undeclare_rule(alerts, rule);
+        if (!rule->declaration) {
+            declare_rule(alerts, rule);
+            if (rule->firing)
+                send_state(alerts, rule);
+        }
         changed = TRUE;
 
+        g_free(previous_name);
         g_free(name);
         g_free(metric);
         g_free(op);

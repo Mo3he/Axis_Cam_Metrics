@@ -39,6 +39,8 @@
  * asking, so the port itself is what makes these requests read-only. */
 #define VIEWER_HTTP_PORT   2209
 #define MAX_REQUEST        16384
+/* The reverse proxy sends a whole request at once; this only bounds a stuck client. */
+#define HTTP_READ_TIMEOUT_S 5
 /* A series request names every metric it wants, so paths get long. */
 #define MAX_PATH_LENGTH    8192
 
@@ -242,7 +244,7 @@ static gboolean on_sample_tick(gpointer user_data) {
     influx_tick(influx);
     procs_tick(procs);
     g_strlcpy(api.mqtt_status, mqtt_state(mqtt), sizeof(api.mqtt_status));
-    g_strlcpy(api.influx_status, influx_state(influx), sizeof(api.influx_status));
+    influx_state(influx, api.influx_status, sizeof(api.influx_status));
     return G_SOURCE_CONTINUE;
 }
 
@@ -304,6 +306,22 @@ static void apply_influx_settings(void) {
     influx_apply(influx, &config);
 }
 
+/* The fine tier's file records its interval and capacity, so it is rewritten
+ * whenever the sample interval changes. */
+static void reopen_fine_persistence(void) {
+    if (!persists[0])
+        return;
+
+    store_set_tier_callback(store, 0, NULL, NULL);
+    persist_close(persists[0]);
+    persists[0] = persist_open(&registry, &store->tiers[0], PERSIST_FILES[0]);
+    if (!persists[0])
+        return;
+
+    persist_sync(persists[0], store, 0);
+    store_set_tier_callback(store, 0, on_tier_sample, GUINT_TO_POINTER(0));
+}
+
 static void restart_sampler(void) {
     guint interval = (guint)g_ascii_strtoull(parameter_value("SampleInterval"), NULL, 10);
     interval = CLAMP(interval, 1, 10);
@@ -311,6 +329,10 @@ static void restart_sampler(void) {
         return;
 
     sample_interval_s = interval;
+    if (store && store->tiers[0].interval_s != interval) {
+        store_set_fine_interval(store, interval);
+        reopen_fine_persistence();
+    }
     if (sample_timer)
         g_source_remove(sample_timer);
     sample_timer = g_timeout_add_seconds(sample_interval_s, on_sample_tick, NULL);
@@ -333,23 +355,6 @@ static void on_parameter_changed(const gchar *name, const gchar *value, gpointer
 
 /* ---------------------------------------------------------------- settings */
 
-static void json_append_escaped(GString *out, const char *value) {
-    for (const char *cursor = value ? value : ""; *cursor; cursor++) {
-        switch (*cursor) {
-        case '"':  g_string_append(out, "\\\""); break;
-        case '\\': g_string_append(out, "\\\\"); break;
-        case '\n': g_string_append(out, "\\n"); break;
-        case '\r': g_string_append(out, "\\r"); break;
-        case '\t': g_string_append(out, "\\t"); break;
-        default:
-            if ((unsigned char)*cursor < 0x20)
-                g_string_append_printf(out, "\\u%04x", (unsigned char)*cursor);
-            else
-                g_string_append_c(out, *cursor);
-        }
-    }
-}
-
 /* Secrets are never returned; the UI only learns whether one is stored. */
 static gchar *settings_json(void) {
     GString *out = g_string_new("{");
@@ -359,14 +364,14 @@ static gchar *settings_json(void) {
         if (i)
             g_string_append_c(out, ',');
         g_string_append_c(out, '"');
-        json_append_escaped(out, parameters[i].name);
+        api_append_json_escaped(out, parameters[i].name);
         g_string_append(out, "\":\"");
         if (!parameters[i].secret)
-            json_append_escaped(out, value);
+            api_append_json_escaped(out, value);
         g_string_append_c(out, '"');
         if (parameters[i].secret) {
             g_string_append(out, ",\"");
-            json_append_escaped(out, parameters[i].name);
+            api_append_json_escaped(out, parameters[i].name);
             g_string_append_printf(out, "IsSet\":\"%s\"", *value ? "yes" : "no");
         }
     }
@@ -400,10 +405,12 @@ static gchar *url_decode(const char *value, gsize length) {
     return decoded;
 }
 
-/* Applies an application/x-www-form-urlencoded body, ignoring unknown keys. */
-static gboolean apply_settings_body(const char *body) {
+/* Applies an application/x-www-form-urlencoded body, ignoring unknown keys.
+ * Returns whether anything changed; *failed reports a rejected write. */
+static gboolean apply_settings_body(const char *body, gboolean *failed) {
     gchar **pairs = g_strsplit(body ? body : "", "&", -1);
     gboolean changed = FALSE;
+    *failed = FALSE;
 
     for (gchar **pair = pairs; *pair; pair++) {
         gchar *separator = strchr(*pair, '=');
@@ -426,6 +433,7 @@ static gboolean apply_settings_body(const char *body) {
         } else {
             syslog(LOG_ERR, "write parameter %s failed: %s", parameter->name,
                    error ? error->message : "unknown error");
+            *failed = TRUE;
         }
 
         g_clear_error(&error);
@@ -471,10 +479,12 @@ static void send_json(GOutputStream *out, gchar *json) {
 /* ---------------------------------------------------------- event stream */
 
 /* The listener is synchronous, so SSE sockets are non-blocking: a slow client
- * misses frames rather than stalling the sampler. */
+ * misses frames rather than stalling the sampler. A frame that only partly fit
+ * is finished before the next one starts, so the stream is never torn. */
 typedef struct {
     GSocketConnection *connection;
-    guint stalled; /* Consecutive frames the client had no room for. */
+    GString *pending; /* Unsent tail of the current frame. */
+    guint stalled;    /* Consecutive frames the client had no room for. */
 } SseClient;
 
 static GList *sse_clients;
@@ -486,6 +496,7 @@ static void sse_drop(SseClient *client) {
     sse_clients = g_list_remove(sse_clients, client);
     g_io_stream_close(G_IO_STREAM(client->connection), NULL, NULL);
     g_object_unref(client->connection);
+    g_string_free(client->pending, TRUE);
     g_free(client);
 }
 
@@ -499,11 +510,32 @@ static void sse_add(GSocketConnection *connection) {
     if (!g_output_stream_write_all(out, headers, sizeof(headers) - 1, NULL, NULL, NULL))
         return;
 
-    g_socket_set_blocking(g_socket_connection_get_socket(connection), FALSE);
+    GSocket *client_socket = g_socket_connection_get_socket(connection);
+    g_socket_set_timeout(client_socket, 0);
+    g_socket_set_blocking(client_socket, FALSE);
 
     SseClient *client = g_new0(SseClient, 1);
     client->connection = g_object_ref(connection);
+    client->pending = g_string_new(NULL);
     sse_clients = g_list_prepend(sse_clients, client);
+}
+
+/* Writes as much of the pending frame as the socket takes. FALSE on a hard error. */
+static gboolean sse_flush(SseClient *client) {
+    GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(client->connection));
+
+    while (client->pending->len) {
+        GError *error = NULL;
+        gssize written = g_output_stream_write(out, client->pending->str, client->pending->len, NULL, &error);
+        if (written > 0) {
+            g_string_erase(client->pending, 0, written);
+            continue;
+        }
+        gboolean would_block = g_error_matches(error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK);
+        g_clear_error(&error);
+        return would_block;
+    }
+    return TRUE;
 }
 
 static void sse_broadcast(void) {
@@ -518,20 +550,19 @@ static void sse_broadcast(void) {
     for (GList *node = sse_clients; node;) {
         GList *next = node->next;
         SseClient *client = node->data;
-        GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(client->connection));
-        GError *error = NULL;
-        gssize written = g_output_stream_write(out, frame, length, NULL, &error);
 
-        if (written > 0) {
-            client->stalled = 0;
-        } else if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK)) {
+        if (!sse_flush(client)) {
+            sse_drop(client);
+        } else if (client->pending->len) {
             if (++client->stalled >= SSE_MAX_STALLED)
                 sse_drop(client);
         } else {
-            sse_drop(client);
+            client->stalled = 0;
+            g_string_append_len(client->pending, frame, (gssize)length);
+            if (!sse_flush(client))
+                sse_drop(client);
         }
 
-        g_clear_error(&error);
         node = next;
     }
 
@@ -553,8 +584,13 @@ static gboolean handle_request(GSocketConnection *connection,
     } else if (is_get && route_is(path, "settings")) {
         send_json(out, settings_json());
     } else if (strcmp(method, "POST") == 0 && route_is(path, "settings")) {
-        gboolean changed = apply_settings_body(body);
-        send_response(out, "200 OK", "application/json", "{\"status\":\"ok\"}");
+        gboolean failed = FALSE;
+        gboolean changed = apply_settings_body(body, &failed);
+        if (failed)
+            send_response(out, "500 Internal Server Error", "application/json",
+                          "{\"error\":\"one or more settings could not be saved\"}");
+        else
+            send_response(out, "200 OK", "application/json", "{\"status\":\"ok\"}");
         if (changed) {
             restart_sampler();
             apply_mqtt_settings();
@@ -608,12 +644,17 @@ static gboolean on_http_request(GSocketService *service, GSocketConnection *conn
     (void)source;
     gboolean read_only = GPOINTER_TO_INT(user_data);
 
+    /* Requests are read on the main loop, so a client that stops sending must
+     * not hold up the sampler for long. */
+    g_socket_set_timeout(g_socket_connection_get_socket(connection), HTTP_READ_TIMEOUT_S);
+
     GInputStream *in = g_io_stream_get_input_stream(G_IO_STREAM(connection));
     GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(connection));
     gchar buffer[MAX_REQUEST];
     gsize total = 0;
     gsize header_length = 0;
-    glong content_length = 0;
+    gint64 content_length = 0;
+    gboolean too_large = FALSE;
     gboolean keep_open = FALSE;
 
     while (total < sizeof(buffer) - 1) {
@@ -626,20 +667,27 @@ static gboolean on_http_request(GSocketService *service, GSocketConnection *conn
         gchar *header_end = strstr(buffer, "\r\n\r\n");
         if (!header_end)
             continue;
-        header_length = (gsize)(header_end - buffer) + 4;
 
-        if (content_length == 0) {
+        if (header_length == 0) {
+            header_length = (gsize)(header_end - buffer) + 4;
             gchar *headers = g_ascii_strdown(buffer, (gssize)header_length);
-            gchar *field = strstr(headers, "content-length:");
+            gchar *field = strstr(headers, "\r\ncontent-length:");
             if (field)
-                content_length = strtol(field + strlen("content-length:"), NULL, 10);
+                content_length = g_ascii_strtoll(field + strlen("\r\ncontent-length:"), NULL, 10);
             g_free(headers);
+
+            if (content_length < 0 || (guint64)content_length > sizeof(buffer) - 1 - header_length) {
+                too_large = TRUE;
+                break;
+            }
         }
         if (total - header_length >= (gsize)content_length)
             break;
     }
 
-    if (header_length == 0) {
+    if (too_large) {
+        send_response(out, "413 Payload Too Large", "application/json", "{\"error\":\"request too large\"}");
+    } else if (header_length == 0 || total - header_length < (gsize)content_length) {
         send_response(out, "400 Bad Request", "application/json", "{\"error\":\"bad request\"}");
     } else {
         gchar method[8] = {0};
@@ -758,6 +806,8 @@ int main(void) {
 
     g_main_loop_run(main_loop);
 
+    while (sse_clients)
+        sse_drop(sse_clients->data);
     if (sample_timer)
         g_source_remove(sample_timer);
     if (persist_retry_timer)

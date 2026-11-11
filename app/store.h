@@ -37,6 +37,7 @@ typedef struct {
     float *scratch;
     gint64 latest_ts;
     gboolean has_latest;
+    double memory_scale; /* Below 1 when capacities were shrunk to fit RAM. */
 } Store;
 
 /* Capacities are scaled down on low-memory devices and logged at startup. */
@@ -55,6 +56,9 @@ guint store_tier_count(Store *store, guint tier_index);
 void store_set_tier_callback(Store *store, guint tier_index, StoreTierCallback callback, gpointer user_data);
 
 void store_push(Store *store, const float *values, gint64 timestamp);
+
+/* Resizes the fine tier for a new sample interval, keeping its newest samples. */
+void store_set_fine_interval(Store *store, guint interval_s);
 
 /* Copies the most recent sample. Returns FALSE before the first push. */
 gboolean store_latest(Store *store, float *out, gint64 *timestamp);

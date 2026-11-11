@@ -13,7 +13,7 @@
 
 #define MAX_SERIES_POINTS 4000
 
-static void append_escaped(GString *out, const char *value) {
+void api_append_json_escaped(GString *out, const char *value) {
     for (const char *c = value ? value : ""; *c; c++) {
         switch (*c) {
         case '"':  g_string_append(out, "\\\""); break;
@@ -34,14 +34,14 @@ static void append_kv(GString *out, const char *key, const char *value, gboolean
     if (comma)
         g_string_append_c(out, ',');
     g_string_append_c(out, '"');
-    append_escaped(out, key);
+    api_append_json_escaped(out, key);
     g_string_append(out, "\":\"");
-    append_escaped(out, value);
+    api_append_json_escaped(out, value);
     g_string_append_c(out, '"');
 }
 
 /* JSON has no NaN, so unavailable readings become null. */
-static void append_number(GString *out, float value) {
+void api_append_json_number(GString *out, double value) {
     if (isnan(value) || isinf(value)) {
         g_string_append(out, "null");
         return;
@@ -131,7 +131,7 @@ gchar *api_meta_json(const Api *api) {
                                "\"persisted\":%s}",
                                i ? "," : "", tier->interval_s, tier->capacity,
                                store_tier_span_s(api->store, i), tier->count,
-                               (api->persist_path && i == STORE_TIERS - 1) ? "true" : "false");
+                               api->persist_path ? "true" : "false");
     }
     g_string_append_printf(out,
                            "],\"bytes\":%zu},\"windows\":[300,900,1800,3600,21600,86400,604800,2592000],",
@@ -164,9 +164,9 @@ static void append_values_object(const Api *api, GString *out, const float *valu
             g_string_append_c(out, ',');
         first = FALSE;
         g_string_append_c(out, '"');
-        append_escaped(out, api->registry->defs[i].id);
+        api_append_json_escaped(out, api->registry->defs[i].id);
         g_string_append(out, "\":");
-        append_number(out, values[i]);
+        api_append_json_number(out, values[i]);
     }
     g_string_append_c(out, '}');
 }
@@ -206,9 +206,9 @@ gchar *api_current_values_json(const Api *api) {
             g_string_append_c(out, ',');
         first = FALSE;
         g_string_append_c(out, '"');
-        append_escaped(out, id);
+        api_append_json_escaped(out, id);
         g_string_append(out, "\":");
-        append_number(out, values[i]);
+        api_append_json_number(out, values[i]);
     }
     g_string_append_c(out, '}');
 
@@ -304,12 +304,12 @@ gchar *api_series_json(const Api *api, const char *query) {
             g_string_append_c(out, ',');
         first = FALSE;
         g_string_append_c(out, '"');
-        append_escaped(out, id);
+        api_append_json_escaped(out, id);
         g_string_append(out, "\":[");
         for (guint p = 0; p < n; p++) {
             if (p)
                 g_string_append_c(out, ',');
-            append_number(out, values[p]);
+            api_append_json_number(out, values[p]);
         }
         g_string_append_c(out, ']');
     }
@@ -342,6 +342,21 @@ gchar *api_health_json(const Api *api) {
 }
 
 /* ---------------------------------------------------------- prometheus */
+
+/* Label values escape backslash, quote and newline; HELP text escapes only
+ * backslash and newline. */
+static void append_prometheus_escaped(GString *out, const char *value, gboolean label) {
+    for (const char *c = value ? value : ""; *c; c++) {
+        if (*c == '\\')
+            g_string_append(out, "\\\\");
+        else if (*c == '\n')
+            g_string_append(out, "\\n");
+        else if (*c == '"' && label)
+            g_string_append(out, "\\\"");
+        else
+            g_string_append_c(out, *c);
+    }
+}
 
 /* Maps a unit to the suffix Prometheus convention expects. */
 static const char *unit_suffix(const char *unit) {
@@ -410,11 +425,15 @@ gchar *api_prometheus_text(const Api *api) {
         return take(out);
     }
 
-    g_string_append_printf(out,
-                           "# HELP axis_device_info Device identity, always 1.\n"
-                           "# TYPE axis_device_info gauge\n"
-                           "axis_device_info{model=\"%s\",serial=\"%s\",firmware=\"%s\"} 1\n",
-                           api->device.model, api->device.serial, api->device.firmware);
+    g_string_append(out, "# HELP axis_device_info Device identity, always 1.\n"
+                         "# TYPE axis_device_info gauge\n"
+                         "axis_device_info{model=\"");
+    append_prometheus_escaped(out, api->device.model, TRUE);
+    g_string_append(out, "\",serial=\"");
+    append_prometheus_escaped(out, api->device.serial, TRUE);
+    g_string_append(out, "\",firmware=\"");
+    append_prometheus_escaped(out, api->device.firmware, TRUE);
+    g_string_append(out, "\"} 1\n");
 
     /* HELP/TYPE must appear once per name, and several ids share a name. */
     GHashTable *declared = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
@@ -432,15 +451,20 @@ gchar *api_prometheus_text(const Api *api) {
 
         if (!g_hash_table_contains(declared, name)) {
             g_hash_table_add(declared, g_strdup(name));
-            g_string_append_printf(out, "# HELP %s %s\n# TYPE %s gauge\n", name, def->label, name);
+            g_string_append_printf(out, "# HELP %s ", name);
+            append_prometheus_escaped(out, def->label, FALSE);
+            g_string_append_printf(out, "\n# TYPE %s gauge\n", name);
         }
 
         char buf[G_ASCII_DTOSTR_BUF_SIZE];
         g_ascii_formatd(buf, sizeof(buf), "%.7g", values[i]);
-        if (label_value[0])
-            g_string_append_printf(out, "%s{%s=\"%s\"} %s\n", name, label_key, label_value, buf);
-        else
+        if (label_value[0]) {
+            g_string_append_printf(out, "%s{%s=\"", name, label_key);
+            append_prometheus_escaped(out, label_value, TRUE);
+            g_string_append_printf(out, "\"} %s\n", buf);
+        } else {
             g_string_append_printf(out, "%s %s\n", name, buf);
+        }
     }
 
     g_hash_table_destroy(declared);

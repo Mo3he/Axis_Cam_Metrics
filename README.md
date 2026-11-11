@@ -92,7 +92,7 @@ Settings are stored in the device's parameter store and are available from
 
 | Parameter | Default | Description |
 |---|---|---|
-| `SampleInterval` | `1` | Seconds between samples, 1 to 10. A slower interval buys a longer fine-grained window rather than less memory. |
+| `SampleInterval` | `1` | Seconds between samples, 1 to 10. A slower interval buys a longer fine-grained window rather than less memory. Takes effect immediately; the 30 minute window refills at the new rate. |
 | `MqttEnabled` | `no` | Publish metrics to an MQTT broker. |
 | `MqttHost` | empty | Broker hostname or address. |
 | `MqttPort` | `1883` | Broker port. Defaults to 8883 when TLS is on and the port is unset. |
@@ -339,6 +339,9 @@ not mistaken for a percentage.
 | `data/alerts` | Every rule with its current value and firing state |
 | `api/rules` | POST `action=save` or `action=delete` with the rule fields |
 
+Rule ids may use letters, digits, `_` and `-` (up to 47 characters), because
+they also name the device event. Other ids are rejected.
+
 ```sh
 curl -k --anyauth -u user:password -X POST \
   'https://<device>/local/Metrics/api/rules' \
@@ -373,8 +376,9 @@ sh tests/run.sh                                   # unit tests, no device needed
 ACAP_PASSWORD=... sh tests/smoke.sh <device> <user>  # every endpoint on a device
 ```
 
-The unit tests cover tier downsampling and the window-to-tier mapping, which
-are the places a bug produces plausible but wrong numbers instead of a crash.
+The unit tests cover tier downsampling, the window-to-tier mapping and resizing
+the fine tier when the sample interval changes, which are the places a bug
+produces plausible but wrong numbers instead of a crash.
 The smoke test asks for every metric in one series request and checks the array
 lengths line up, which is what catches truncation and encoding faults in the
 request path. It reads the password from the environment so it never lands in

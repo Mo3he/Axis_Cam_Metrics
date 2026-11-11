@@ -124,10 +124,55 @@ static void test_series_query(void) {
     metrics_registry_clear(&registry);
 }
 
+/* Changing the sample interval at runtime must keep the fine tier honest about
+ * its spacing, or a 30 minute chart reads from a 5 minute buffer. */
+static void test_fine_interval_change(void) {
+    printf("fine interval change\n");
+
+    const char *ids[] = {"a"};
+    MetricRegistry registry;
+    register_metrics(&registry, ids, 1);
+    Store *store = store_new(&registry, 10);
+
+    gint64 base = 3000000;
+    for (int i = 0; i < 400; i++) {
+        float values[1] = {(float)i};
+        store_push(store, values, base + i * 10);
+    }
+    guint before = store->tiers[0].capacity;
+    CHECK(store_tier_count(store, 0) == before, "10s tier filled to capacity (%u)", before);
+
+    store_set_fine_interval(store, 1);
+    CHECK(store->tiers[0].interval_s == 1, "fine tier reports the new interval");
+    CHECK(store->tiers[0].capacity > before, "capacity grew for the faster rate (%u)", store->tiers[0].capacity);
+    CHECK(store_tier_count(store, 0) == before, "existing samples kept (%u)", store_tier_count(store, 0));
+    CHECK(store_tier_for_window(store, 1800) == 0, "30m still served by the fine tier");
+
+    float row[1];
+    gint64 timestamp = 0;
+    store_tier_sample(store, 0, store_tier_count(store, 0) - 1, row, &timestamp);
+    CHECK(close_enough(row[0], 399.0), "newest sample survives the resize (%.1f)", row[0]);
+
+    float next[1] = {1000.0f};
+    store_push(store, next, base + 4000);
+    store_tier_sample(store, 0, store_tier_count(store, 0) - 1, row, &timestamp);
+    CHECK(close_enough(row[0], 1000.0) && timestamp == base + 4000, "appends continue after the resize");
+
+    store_set_fine_interval(store, 10);
+    CHECK(store_tier_count(store, 0) == store->tiers[0].capacity, "shrinking keeps only what fits (%u)",
+          store_tier_count(store, 0));
+    store_tier_sample(store, 0, store_tier_count(store, 0) - 1, row, &timestamp);
+    CHECK(close_enough(row[0], 1000.0), "shrinking keeps the newest samples (%.1f)", row[0]);
+
+    store_free(store);
+    metrics_registry_clear(&registry);
+}
+
 int main(void) {
     test_downsampling();
     test_window_selection();
     test_series_query();
+    test_fine_interval_change();
 
     printf("\n%s\n", failures ? "FAILED" : "all tests passed");
     return failures ? 1 : 0;

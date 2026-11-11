@@ -4,6 +4,10 @@
  * paho.mqtt.c is static: OS 13 does not ship libpaho and recorders lack the
  * device MQTT client API. The async client keeps a down broker from blocking
  * the sampler; paho owns the reconnect loop.
+ *
+ * paho calls back on its own thread, while the registry, selection and config
+ * belong to the main loop (a new disk even rebuilds the registry). Callbacks
+ * therefore only set flags, and mqtt_tick does the work on the main loop.
  */
 
 #include "mqtt.h"
@@ -22,7 +26,8 @@ struct Mqtt {
     MQTTAsync client;
     char address[224];
     char client_id[64];
-    gboolean connected;
+    gint connected;      /* Atomic: written by paho callbacks. */
+    gint just_connected; /* Atomic: set on (re)connect, consumed by mqtt_tick. */
     gboolean discovery_sent;
     gint64 last_publish;
 };
@@ -132,6 +137,13 @@ static int publish(Mqtt *mqtt, const char *topic_name, const char *payload, int 
 
 /* ------------------------------------------------------ discovery payloads */
 
+/* Appends "key":"value", with the value escaped and a trailing comma. */
+static void append_field(GString *out, const char *key, const char *value) {
+    g_string_append_printf(out, "\"%s\":\"", key);
+    api_append_json_escaped(out, value);
+    g_string_append(out, "\",");
+}
+
 static void publish_discovery(Mqtt *mqtt, gboolean withdraw_stale) {
     char state_topic[256];
     char availability_topic[256];
@@ -170,29 +182,38 @@ static void publish_discovery(Mqtt *mqtt, gboolean withdraw_stale) {
             continue;
         }
 
-        GString *payload = g_string_new("{");
-        g_string_append_printf(payload, "\"name\":\"%s\",", def->label);
-        g_string_append_printf(payload, "\"unique_id\":\"axis_%s\",", object_id);
-        g_string_append_printf(payload, "\"state_topic\":\"%s\",", state_topic);
-        g_string_append_printf(payload, "\"availability_topic\":\"%s\",", availability_topic);
+        gchar *unique_id = g_strdup_printf("axis_%s", object_id);
         /* Every entity reads its own field out of the one retained state object. */
-        g_string_append_printf(payload, "\"value_template\":\"{{ value_json['%s'] }}\",", def->id);
+        gchar *value_template = g_strdup_printf("{{ value_json['%s'] }}", def->id);
+
+        GString *payload = g_string_new("{");
+        append_field(payload, "name", def->label);
+        append_field(payload, "unique_id", unique_id);
+        append_field(payload, "state_topic", state_topic);
+        append_field(payload, "availability_topic", availability_topic);
+        append_field(payload, "value_template", value_template);
         if (def->unit[0])
-            g_string_append_printf(payload, "\"unit_of_measurement\":\"%s\",", ha_unit_for(def->unit));
+            append_field(payload, "unit_of_measurement", ha_unit_for(def->unit));
         const char *device_class = device_class_for(def->unit);
         if (device_class)
-            g_string_append_printf(payload, "\"device_class\":\"%s\",", device_class);
+            append_field(payload, "device_class", device_class);
         const char *suggested = ha_suggested_unit(def);
         if (suggested) {
-            g_string_append_printf(payload, "\"suggested_unit_of_measurement\":\"%s\",", suggested);
+            append_field(payload, "suggested_unit_of_measurement", suggested);
             g_string_append(payload, "\"suggested_display_precision\":1,");
         }
-        g_string_append(payload, "\"state_class\":\"measurement\",");
-        g_string_append_printf(payload,
-                               "\"device\":{\"identifiers\":[\"axis_%s\"],\"name\":\"%s\","
-                               "\"manufacturer\":\"Axis\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
-                               device->serial, device->model[0] ? device->model : "Axis device",
-                               device->model, device->firmware);
+        append_field(payload, "state_class", "measurement");
+        g_string_append(payload, "\"device\":{\"identifiers\":[\"axis_");
+        api_append_json_escaped(payload, device->serial);
+        g_string_append(payload, "\"],");
+        append_field(payload, "name", device->model[0] ? device->model : "Axis device");
+        append_field(payload, "manufacturer", "Axis");
+        append_field(payload, "model", device->model);
+        g_string_append(payload, "\"sw_version\":\"");
+        api_append_json_escaped(payload, device->firmware);
+        g_string_append(payload, "\"}}");
+        g_free(unique_id);
+        g_free(value_template);
 
         publish(mqtt, config_topic, payload->str, 0, 1, 0);
         g_string_free(payload, TRUE);
@@ -206,10 +227,22 @@ static void publish_discovery(Mqtt *mqtt, gboolean withdraw_stale) {
 
 /* --------------------------------------------------------------- callbacks */
 
+/* paho thread: flags only, see the top of the file. */
 static void on_connected(void *context, char *cause) {
     (void)cause;
     Mqtt *mqtt = context;
-    mqtt->connected = TRUE;
+    g_atomic_int_set(&mqtt->connected, TRUE);
+    g_atomic_int_set(&mqtt->just_connected, TRUE);
+}
+
+static void on_connection_lost(void *context, char *cause) {
+    Mqtt *mqtt = context;
+    g_atomic_int_set(&mqtt->connected, FALSE);
+    syslog(LOG_WARNING, "mqtt connection lost: %s", cause ? cause : "unknown");
+}
+
+/* Main loop: what a (re)connect needs, deferred from on_connected. */
+static void handle_connected(Mqtt *mqtt) {
     syslog(LOG_INFO, "mqtt connected to %s", mqtt->address);
 
     char status_topic[256];
@@ -219,12 +252,6 @@ static void on_connected(void *context, char *cause) {
     if (mqtt->config.discovery)
         publish_discovery(mqtt, !mqtt->discovery_sent);
     mqtt->last_publish = 0; /* Publish state immediately rather than after a full interval. */
-}
-
-static void on_connection_lost(void *context, char *cause) {
-    Mqtt *mqtt = context;
-    mqtt->connected = FALSE;
-    syslog(LOG_WARNING, "mqtt connection lost: %s", cause ? cause : "unknown");
 }
 
 static int on_message(void *context, char *topic_name, int topic_len, MQTTAsync_message *message) {
@@ -247,7 +274,7 @@ static void disconnect(Mqtt *mqtt) {
     if (!mqtt->client)
         return;
 
-    if (mqtt->connected) {
+    if (g_atomic_int_get(&mqtt->connected)) {
         char status_topic[256];
         topic(mqtt, status_topic, sizeof(status_topic), "status");
         /* The will only covers an ungraceful exit, so a clean stop has to
@@ -261,7 +288,8 @@ static void disconnect(Mqtt *mqtt) {
 
     MQTTAsync_destroy(&mqtt->client);
     mqtt->client = NULL;
-    mqtt->connected = FALSE;
+    g_atomic_int_set(&mqtt->connected, FALSE);
+    g_atomic_int_set(&mqtt->just_connected, FALSE);
     mqtt->discovery_sent = FALSE;
 }
 
@@ -332,7 +360,7 @@ static void connect_now(Mqtt *mqtt) {
 void mqtt_apply(Mqtt *mqtt, const MqttConfig *config) {
     gboolean reconnect = connection_differs(&mqtt->config, config) || !mqtt->client;
     /* Discovery is otherwise only published on connect. */
-    gboolean rediscover = !reconnect && mqtt->connected && config->discovery &&
+    gboolean rediscover = !reconnect && g_atomic_int_get(&mqtt->connected) && config->discovery &&
                           (config->discovery != mqtt->config.discovery ||
                            config->discovery_all != mqtt->config.discovery_all);
     mqtt->config = *config;
@@ -355,7 +383,11 @@ void mqtt_apply(Mqtt *mqtt, const MqttConfig *config) {
 }
 
 void mqtt_tick(Mqtt *mqtt) {
-    if (!mqtt->connected || !mqtt->config.enabled)
+    if (!mqtt->client || !mqtt->config.enabled)
+        return;
+    if (g_atomic_int_compare_and_exchange(&mqtt->just_connected, TRUE, FALSE))
+        handle_connected(mqtt);
+    if (!g_atomic_int_get(&mqtt->connected))
         return;
 
     gint64 now = g_get_monotonic_time() / G_USEC_PER_SEC;
@@ -376,7 +408,7 @@ void mqtt_publish_alert(Mqtt *mqtt,
                         const char *metric,
                         double value,
                         gboolean firing) {
-    if (!mqtt || !mqtt->connected)
+    if (!mqtt || !g_atomic_int_get(&mqtt->connected))
         return;
 
     char leaf[128];
@@ -384,11 +416,15 @@ void mqtt_publish_alert(Mqtt *mqtt,
     g_snprintf(leaf, sizeof(leaf), "alert/%s", rule_id);
     topic(mqtt, alert_topic, sizeof(alert_topic), leaf);
 
-    gchar *payload = g_strdup_printf(
-        "{\"rule\":\"%s\",\"name\":\"%s\",\"metric\":\"%s\",\"value\":%g,\"state\":\"%s\"}",
-        rule_id, name, metric, value, firing ? "firing" : "cleared");
-    publish(mqtt, alert_topic, payload, 1, 1, 0);
-    g_free(payload);
+    GString *payload = g_string_new("{");
+    append_field(payload, "rule", rule_id);
+    append_field(payload, "name", name);
+    append_field(payload, "metric", metric);
+    g_string_append(payload, "\"value\":");
+    api_append_json_number(payload, value);
+    g_string_append_printf(payload, ",\"state\":\"%s\"}", firing ? "firing" : "cleared");
+    publish(mqtt, alert_topic, payload->str, 1, 1, 0);
+    g_string_free(payload, TRUE);
 }
 
 const char *mqtt_state(const Mqtt *mqtt) {
@@ -396,7 +432,7 @@ const char *mqtt_state(const Mqtt *mqtt) {
         return "disabled";
     if (!mqtt->client)
         return "error";
-    return mqtt->connected ? "connected" : "connecting";
+    return g_atomic_int_get(&mqtt->connected) ? "connected" : "connecting";
 }
 
 void mqtt_free(Mqtt *mqtt) {

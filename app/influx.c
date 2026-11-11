@@ -36,8 +36,15 @@ static void set_state(Influx *influx, const char *state) {
     g_mutex_unlock(&influx->state_lock);
 }
 
-const char *influx_state(const Influx *influx) {
-    return influx && influx->config.enabled ? influx->state : "disabled";
+/* Copied under the lock because the worker rewrites the state mid-write. */
+void influx_state(Influx *influx, char *out, gsize length) {
+    if (!influx || !influx->config.enabled) {
+        g_strlcpy(out, "disabled", length);
+        return;
+    }
+    g_mutex_lock(&influx->state_lock);
+    g_strlcpy(out, influx->state, length);
+    g_mutex_unlock(&influx->state_lock);
 }
 
 /* ------------------------------------------------------------ line protocol */

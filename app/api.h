@@ -46,4 +46,10 @@ gchar *api_prometheus_text(const Api *api);
 /* Extracts a query parameter from a request path, or NULL. Caller frees. */
 gchar *api_query_param(const char *query, const char *name);
 
+/* Appends value as the inside of a JSON string, escaping quotes and control characters. */
+void api_append_json_escaped(GString *out, const char *value);
+
+/* Appends a JSON number, or null for NaN and infinity, which JSON cannot represent. */
+void api_append_json_number(GString *out, double value);
+
 #endif /* API_H */

@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **Sample interval:** changing `SampleInterval` now resizes the 30 minute
+  window straight away. Before, the fine history tier kept the old interval
+  until a restart, so going from 10s to 1s left the 30 minute chart showing
+  only the last 5 minutes.
+- **MQTT:** connect handling (online status and Home Assistant discovery) now
+  runs on the main loop instead of paho's network thread, where it could read
+  the metric list while a newly mounted disk was rebuilding it.
+- **Escaping:** alert names, Home Assistant discovery fields and alert MQTT
+  payloads are JSON-escaped, so a quote or newline in a rule name no longer
+  produces invalid JSON. Prometheus label values and help text are escaped too.
+  A non-numeric alert threshold such as `nan` is ignored instead of breaking
+  `data/alerts`.
+- **Alert rules:** ids are limited to letters, digits, `_` and `-`, because
+  they also name the rules file section and the device event. Deleting a rule
+  removes its device event, and renaming one updates the event's name.
+- **Settings:** saving returns an error when the device rejects a value,
+  instead of reporting success.
+- **HTTP:** a request body over the 16 KB limit gets `413` instead of being
+  cut off silently, and a client that stops sending is dropped after 5 seconds
+  rather than holding up sampling. A slow `data/stream` reader no longer gets a
+  frame cut in half.
+- **`meta`:** every history tier now reports `persisted: true` when history is
+  on a card or disk, since all three tiers are saved.
+
 ## 0.1.3
 
 ### Breaking change

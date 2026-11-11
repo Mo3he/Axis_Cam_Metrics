@@ -28,6 +28,7 @@ void influx_apply(Influx *influx, const InfluxConfig *config);
 /* Called on every sample; writes at the configured interval. */
 void influx_tick(Influx *influx);
 
-const char *influx_state(const Influx *influx);
+/* Copies the connection state, such as "connected" or "unauthorized". */
+void influx_state(Influx *influx, char *out, gsize length);
 
 #endif /* INFLUX_H */

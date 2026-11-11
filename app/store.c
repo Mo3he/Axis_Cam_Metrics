@@ -33,6 +33,12 @@ static guint64 total_memory_bytes(void) {
     return kb * 1024;
 }
 
+/* A slower sample rate buys a longer fine window rather than more memory. */
+static guint fine_capacity(guint interval_s, double memory_scale) {
+    guint capacity = MAX(TIER_MIN_CAPACITY[0], TIER_CAPACITY[0] / MAX(1, interval_s));
+    return MAX(TIER_MIN_CAPACITY[0], (guint)((double)capacity * memory_scale));
+}
+
 static gsize tier_bytes(const StoreTier *tier, guint n_metrics) {
     return (gsize)tier->capacity * (n_metrics * sizeof(float) + sizeof(gint64));
 }
@@ -45,14 +51,14 @@ Store *store_new(const MetricRegistry *registry, guint base_interval_s) {
     g_mutex_init(&store->lock);
     store->latest = g_new0(float, n_metrics);
     store->scratch = g_new0(float, n_metrics);
+    store->memory_scale = 1.0;
 
     guint capacity[STORE_TIERS];
     for (guint i = 0; i < STORE_TIERS; i++)
         capacity[i] = TIER_CAPACITY[i];
 
-    /* A slower sample rate buys a longer fine window rather than more memory. */
     guint fine_interval = MAX(1, base_interval_s);
-    capacity[0] = MAX(TIER_MIN_CAPACITY[0], TIER_CAPACITY[0] / fine_interval);
+    capacity[0] = fine_capacity(fine_interval, 1.0);
 
     guint64 memory = total_memory_bytes();
     if (memory > 0) {
@@ -64,6 +70,7 @@ Store *store_new(const MetricRegistry *registry, guint base_interval_s) {
 
         if (wanted > budget) {
             double scale = (double)budget / (double)wanted;
+            store->memory_scale = scale;
             for (guint i = 0; i < STORE_TIERS; i++)
                 capacity[i] = MAX(TIER_MIN_CAPACITY[i], (guint)((double)capacity[i] * scale));
             syslog(LOG_WARNING,
@@ -193,6 +200,38 @@ void store_push(Store *store, const float *values, gint64 timestamp) {
             g_free(pending_values[i]);
         }
     }
+}
+
+void store_set_fine_interval(Store *store, guint interval_s) {
+    interval_s = MAX(1, interval_s);
+    g_mutex_lock(&store->lock);
+
+    StoreTier *tier = &store->tiers[0];
+    if (tier->interval_s != interval_s) {
+        guint capacity = fine_capacity(interval_s, store->memory_scale);
+        gint64 *timestamps = g_new0(gint64, capacity);
+        float *data = g_new0(float, (gsize)capacity * store->n_metrics);
+
+        guint keep = MIN(tier->count, capacity);
+        guint start = (tier->head + tier->capacity - keep) % tier->capacity;
+        for (guint i = 0; i < keep; i++) {
+            guint slot = (start + i) % tier->capacity;
+            timestamps[i] = tier->timestamps[slot];
+            memcpy(&data[(gsize)i * store->n_metrics], &tier->data[(gsize)slot * store->n_metrics],
+                   store->n_metrics * sizeof(float));
+        }
+
+        g_free(tier->timestamps);
+        g_free(tier->data);
+        tier->timestamps = timestamps;
+        tier->data = data;
+        tier->interval_s = interval_s;
+        tier->capacity = capacity;
+        tier->count = keep;
+        tier->head = keep % capacity;
+    }
+
+    g_mutex_unlock(&store->lock);
 }
 
 gboolean store_latest(Store *store, float *out, gint64 *timestamp) {
