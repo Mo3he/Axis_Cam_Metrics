@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-### Fixes
-
 - **Sample interval:** changing `SampleInterval` now resizes the 30 minute
   window straight away. Before, the fine history tier kept the old interval
   until a restart, so going from 10s to 1s left the 30 minute chart showing
