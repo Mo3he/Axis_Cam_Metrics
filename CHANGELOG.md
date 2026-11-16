@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 - 2026-11-16
 
+- Release 0.1.5.
 - **30 day chart:** the 30d view now shows the last 30 days up to now.
   Before, it stopped about two weeks short of today (in mid-November it ended
   at the end of October), while the 7d view was correct. A chart request can
