@@ -2,10 +2,12 @@
 
 ## Unreleased
 
-- **30 day chart:** the 30d view now runs up to the present. The series
-  response is capped at 4000 points, and the 5 minute tier holds up to 8640,
-  so only the oldest ~14 days were returned. Windows larger than the cap are
-  now averaged down so they cover the whole range.
+- **30 day chart:** the 30d view now shows the last 30 days up to now.
+  Before, it stopped about two weeks short of today (in mid-November it ended
+  at the end of October), while the 7d view was correct. A chart request can
+  return at most 4000 points, and 30 days of 5 minute history is up to 8640,
+  so the oldest points filled the chart and the newest were left out. Long
+  windows are now averaged down to fit, so they always reach the latest sample.
 
 ## 0.1.4 - 2026-11-12
 
