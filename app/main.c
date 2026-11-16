@@ -613,6 +613,8 @@ static gboolean handle_request(GSocketConnection *connection,
         guint count = limit ? (guint)g_ascii_strtoull(limit, NULL, 10) : 12;
         g_free(limit);
         send_json(out, procs_json(procs, CLAMP(count, 1, 100)));
+    } else if (is_get && route_is(path, "dlpu")) {
+        send_json(out, collector_dlpu_json(collector));
     } else if (is_get && route_is(path, "alerts")) {
         send_json(out, alerts_json(alerts));
     } else if (strcmp(method, "POST") == 0 && route_is(path, "rules")) {

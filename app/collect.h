@@ -17,4 +17,7 @@ void collector_sample(Collector *collector, float *values);
  * often mounts after boot, and new metrics can only be registered by rebuilding. */
 gboolean collector_mounts_changed(Collector *collector);
 
+/* The models larod reported at the last slow sample, as a JSON object. */
+gchar *collector_dlpu_json(Collector *collector);
+
 #endif /* COLLECT_H */

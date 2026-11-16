@@ -5,6 +5,7 @@
  */
 
 #include "collect.h"
+#include "larodinfo.h"
 #include "vapix.h"
 
 #include <dirent.h>
@@ -105,6 +106,13 @@ struct Collector {
     guint idx_poe_total, idx_poe_budget;
 
     guint idx_power_draw, idx_power_requested, idx_power_pse_class, idx_power_lldp_class;
+
+    guint idx_video_total, idx_video_used, idx_video_usage;
+
+    guint idx_dlpu_inferences;
+    guint64 prev_dlpu_irqs;
+    LarodInfo *larod;
+    guint idx_dlpu_models, idx_dlpu_model_bytes, idx_dlpu_sessions;
 
     guint idx_flash_life, idx_flash_eol;
     char flash_life_path[160], flash_eol_path[160];
@@ -644,6 +652,112 @@ static void sample_flash_wear(Collector *c, float *values) {
         set(values, c->idx_flash_eol, (double)g_ascii_strtoull(buf, NULL, 16));
 }
 
+/* ------------------------------------------------- video memory and the DLPU */
+
+static gboolean meminfo_has(const char *key) {
+    FILE *f = fopen("/proc/meminfo", "re");
+    if (!f)
+        return FALSE;
+    char line[128];
+    gboolean found = FALSE;
+    while (!found && fgets(line, sizeof(line), f))
+        found = g_str_has_prefix(line, key);
+    fclose(f);
+    return found;
+}
+
+/* Axis reserves a contiguous pool ("Cmax") for video buffers, the encoder and
+ * analytics. When it runs out, streams fail to start while ordinary RAM still
+ * looks fine. */
+static void discover_video_memory(Collector *c) {
+    if (!meminfo_has("CmaxTotal:"))
+        return;
+    c->idx_video_total = reg(c, "mem.video_total", "Video memory total", "B", "memory");
+    c->idx_video_used = reg(c, "mem.video_used", "Video memory used", "B", "memory");
+    c->idx_video_usage = reg(c, "mem.video_usage", "Video memory usage", "%", "memory");
+}
+
+/* Sums every CPU's count on the interrupt lines owned by the Ethos-N DLPU
+ * driver. It raises one per completed inference (checked against larod jobs on
+ * an ARTPEC-9), so the rate is inferences per second. */
+static gboolean read_dlpu_irqs(guint64 *out) {
+    FILE *f = fopen("/proc/interrupts", "re");
+    if (!f)
+        return FALSE;
+
+    char line[1024];
+    guint cpus = 0;
+    if (fgets(line, sizeof(line), f)) {
+        for (const char *p = line; (p = strstr(p, "CPU")); p += 3)
+            cpus++;
+    }
+
+    gboolean found = FALSE;
+    guint64 total = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (!strstr(line, "ethosn"))
+            continue;
+        char *cursor = strchr(line, ':');
+        if (!cursor)
+            continue;
+        cursor++;
+        for (guint i = 0; i < cpus; i++) {
+            char *end = NULL;
+            guint64 count = g_ascii_strtoull(cursor, &end, 10);
+            if (end == cursor)
+                break;
+            total += count;
+            cursor = end;
+        }
+        found = TRUE;
+    }
+    fclose(f);
+    *out = total;
+    return found;
+}
+
+static void discover_dlpu(Collector *c) {
+    guint64 irqs;
+    if (read_dlpu_irqs(&irqs))
+        c->idx_dlpu_inferences = reg(c, "dlpu.inferences", "DLPU inferences", "/s", "dlpu");
+
+    c->larod = larod_info_open();
+    if (c->larod) {
+        c->idx_dlpu_models = reg(c, "dlpu.models", "DLPU models loaded", "", "dlpu");
+        c->idx_dlpu_model_bytes = reg(c, "dlpu.model_bytes", "DLPU model size", "B", "dlpu");
+        c->idx_dlpu_sessions = reg(c, "dlpu.sessions", "larod clients", "", "dlpu");
+    }
+}
+
+static void sample_dlpu(Collector *c, float *values, double seconds, gboolean first) {
+    if (!c->idx_dlpu_inferences)
+        return;
+    guint64 irqs;
+    if (!read_dlpu_irqs(&irqs))
+        return;
+    if (!first)
+        set(values, c->idx_dlpu_inferences, rate(irqs, c->prev_dlpu_irqs, seconds));
+    c->prev_dlpu_irqs = irqs;
+}
+
+static void sample_larod(Collector *c, float *values) {
+    LarodStats stats;
+    if (!c->larod || !larod_info_read(c->larod, &stats))
+        return;
+    set(values, c->idx_dlpu_models, stats.models);
+    set(values, c->idx_dlpu_model_bytes, (double)stats.model_bytes);
+    set(values, c->idx_dlpu_sessions, (double)stats.sessions);
+}
+
+gchar *collector_dlpu_json(Collector *c) {
+    GString *out = g_string_new("{\"available\":");
+    g_string_append(out, c->larod ? "true" : "false");
+    g_string_append(out, ",\"models\":");
+    larod_info_models_json(c->larod, out);
+    g_string_append_c(out, '}');
+    return g_string_free(out, FALSE);
+}
+
 static void mark_slow(Collector *c) {
     for (guint i = 0; i < c->n_sensors; i++)
         c->is_slow[c->sensors[i].idx] = TRUE;
@@ -663,6 +777,9 @@ static void mark_slow(Collector *c) {
     if (c->idx_power_lldp_class) c->is_slow[c->idx_power_lldp_class] = TRUE;
     if (c->idx_flash_life) c->is_slow[c->idx_flash_life] = TRUE;
     if (c->idx_flash_eol) c->is_slow[c->idx_flash_eol] = TRUE;
+    if (c->idx_dlpu_models) c->is_slow[c->idx_dlpu_models] = TRUE;
+    if (c->idx_dlpu_model_bytes) c->is_slow[c->idx_dlpu_model_bytes] = TRUE;
+    if (c->idx_dlpu_sessions) c->is_slow[c->idx_dlpu_sessions] = TRUE;
 }
 
 Collector *collector_new(MetricRegistry *registry) {
@@ -678,6 +795,8 @@ Collector *collector_new(MetricRegistry *registry) {
     discover_poe(c);
     discover_power(c);
     discover_flash_wear(c);
+    discover_video_memory(c);
+    discover_dlpu(c);
 
     c->slow_cache = g_new(float, registry->count);
     c->is_slow = g_new0(gboolean, registry->count);
@@ -689,6 +808,7 @@ Collector *collector_new(MetricRegistry *registry) {
 }
 
 void collector_free(Collector *collector) {
+    larod_info_close(collector->larod);
     g_free(collector->slow_cache);
     g_free(collector->is_slow);
     g_free(collector);
@@ -788,6 +908,7 @@ static void sample_memory(Collector *c, float *values) {
     char line[128];
     guint64 total = 0, available = 0, free_kb = 0, buffers = 0, cached = 0;
     guint64 swap_total = 0, swap_free = 0;
+    guint64 video_total = 0, video_used = 0;
     while (fgets(line, sizeof(line), f)) {
         guint64 v;
         if (sscanf(line, "MemTotal: %" G_GUINT64_FORMAT " kB", &v) == 1) total = v;
@@ -797,8 +918,17 @@ static void sample_memory(Collector *c, float *values) {
         else if (sscanf(line, "Cached: %" G_GUINT64_FORMAT " kB", &v) == 1) cached = v;
         else if (sscanf(line, "SwapTotal: %" G_GUINT64_FORMAT " kB", &v) == 1) swap_total = v;
         else if (sscanf(line, "SwapFree: %" G_GUINT64_FORMAT " kB", &v) == 1) swap_free = v;
+        else if (sscanf(line, "CmaxTotal: %" G_GUINT64_FORMAT " kB", &v) == 1) video_total = v;
+        else if (sscanf(line, "CmaxAllocated: %" G_GUINT64_FORMAT " kB", &v) == 1) video_used = v;
     }
     fclose(f);
+
+    if (c->idx_video_total) {
+        set(values, c->idx_video_total, (double)video_total * 1024.0);
+        set(values, c->idx_video_used, (double)video_used * 1024.0);
+        set(values, c->idx_video_usage,
+            video_total ? 100.0 * (double)video_used / (double)video_total : NAN);
+    }
 
     set(values, c->idx_mem_total, (double)total * 1024.0);
     set(values, c->idx_mem_free, (double)free_kb * 1024.0);
@@ -1011,6 +1141,7 @@ void collector_sample(Collector *c, float *values) {
     sample_ifaces(c, values, seconds, first);
     sample_disks(c, values, seconds, first);
     sample_mounts(c, values);
+    sample_dlpu(c, values, seconds, first);
 
     if (now >= c->slow_deadline) {
         c->slow_deadline = now + (gint64)SLOW_INTERVAL_S * G_USEC_PER_SEC;
@@ -1018,6 +1149,7 @@ void collector_sample(Collector *c, float *values) {
         sample_poe(c, c->slow_cache);
         sample_power(c, c->slow_cache);
         sample_flash_wear(c, c->slow_cache);
+        sample_larod(c, c->slow_cache);
     }
     for (guint i = 0; i < c->registry->count; i++) {
         if (c->is_slow[i])

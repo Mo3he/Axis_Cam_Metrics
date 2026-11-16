@@ -47,7 +47,8 @@ static gboolean is_essential(const char *id, gboolean named_sensors) {
     static const char *exact[] = {"cpu.usage",       "mem.usage",     "mem.used",
                                   "load.1",          "sys.uptime",    "flash.life_used",
                                   "flash.pre_eol",   "poe.total",     "poe.budget",
-                                  "power.draw",      NULL};
+                                  "power.draw",      "mem.video_usage", "dlpu.inferences",
+                                  NULL};
     for (int i = 0; exact[i]; i++) {
         if (strcmp(id, exact[i]) == 0)
             return TRUE;

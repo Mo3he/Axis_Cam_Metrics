@@ -227,6 +227,12 @@
     var swap = pick(["mem.swap_usage"], ["swap used"]);
     if (swap.length && hasId("mem.swap_total")) specs.push({ title: "Swap", unit: "%", max: 100, series: swap });
 
+    var video = pick(["mem.video_usage"], ["used"]);
+    if (video.length) specs.push({ title: "Video memory", unit: "%", max: 100, series: video });
+
+    var dlpu = pick(["dlpu.inferences"], ["inferences"]);
+    if (dlpu.length) specs.push({ title: "DLPU inferences", unit: "/s", series: dlpu });
+
     /* Thermal zones and named sensors share this group; filtering on the unit
      * keeps fan RPM and heater state out. */
     var temps = byUnit("temperature", "C").map(function (m) {
@@ -470,6 +476,23 @@
           var poeClass = v["power.lldp_class"] != null ? v["power.lldp_class"] : v["power.pse_class"];
           html += card("Power", fmtCount(v["power.draw"]) + " W",
             poeClass != null ? "PoE class " + fmtCount(poeClass) : "current draw");
+        }
+
+        if (v["mem.video_usage"] != null) {
+          html += card("Video memory", fmtPercent(v["mem.video_usage"]),
+            fmtBytes(v["mem.video_used"]) + " of " + fmtBytes(v["mem.video_total"]),
+            severityFor(v["mem.video_usage"]));
+        }
+
+        if (v["dlpu.inferences"] != null || v["dlpu.models"] != null) {
+          var models = v["dlpu.models"];
+          var modelText = models != null
+            ? fmtCount(models) + (models === 1 ? " model, " : " models, ") + fmtBytes(v["dlpu.model_bytes"])
+            : "";
+          html += v["dlpu.inferences"] != null
+            ? card("DLPU inferences", fmtCount(v["dlpu.inferences"]) + "/s", modelText || "per second")
+            : card("DLPU", fmtCount(models) + (models === 1 ? " model" : " models"),
+                fmtBytes(v["dlpu.model_bytes"]) + " loaded");
         }
 
         /* Wear moves over years, so no chart. pre_eol 1 is normal; 2 and 3 mean
@@ -893,6 +916,33 @@
       });
   }
 
+  /* ------------------------------------------------------- loaded models */
+
+  function refreshModels() {
+    return getJson("dlpu")
+      .then(function (payload) {
+        var panel = document.getElementById("dlpu-panel");
+        var rows = payload.models || [];
+        if (!payload.available || !rows.length) {
+          panel.hidden = true;
+          return;
+        }
+        panel.hidden = false;
+        var onAccelerator = rows.filter(function (m) { return m.accelerator; }).length;
+        document.getElementById("dlpu-note").textContent =
+          onAccelerator + " on the DLPU  \u00b7  as reported by larod, refreshed every 30s";
+        document.getElementById("dlpu-body").innerHTML = rows
+          .map(function (m) {
+            return "<tr><td>" + escapeHtml(m.name) + "</td><td>" + escapeHtml(m.device) +
+              '</td><td class="num">' + (m.bytes ? fmtBytes(m.bytes) : "\u2013") + "</td></tr>";
+          })
+          .join("");
+      })
+      .catch(function () {
+        document.getElementById("dlpu-panel").hidden = true;
+      });
+  }
+
   /* ------------------------------------------------------------ lifecycle */
 
   function seriesIntervalMs() {
@@ -904,7 +954,10 @@
   function restartTimers() {
     if (currentTimer) clearInterval(currentTimer);
     if (seriesTimer) clearInterval(seriesTimer);
-    if (!procsTimer) procsTimer = setInterval(refreshProcesses, 10000);
+    if (!procsTimer) procsTimer = setInterval(function () {
+      refreshProcesses();
+      refreshModels();
+    }, 10000);
     currentTimer = setInterval(function () {
       refreshCurrent();
       refreshAlerts();
@@ -974,7 +1027,7 @@
         updateBanner();
         setupSettings();
         restartTimers();
-        return Promise.all([refreshCurrent(), refreshSeries(), refreshAlerts(), refreshProcesses()]);
+        return Promise.all([refreshCurrent(), refreshSeries(), refreshAlerts(), refreshProcesses(), refreshModels()]);
       })
       .catch(function (error) {
         setStatus(error.message, "error");

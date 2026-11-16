@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **Video memory:** cameras now report video memory, the reserved pool that
+  video buffers, the encoder and analytics share. When it fills up, new streams
+  and analytics fail to start even though ordinary memory looks fine, so it is
+  shown as a chart and a card and is a default Home Assistant entity.
+- **DLPU:** devices with a deep learning processor now show how many
+  inferences it completes per second, how many models are loaded on it and
+  their size, and how many clients are connected to larod. A new **Loaded
+  models** panel lists each model larod has loaded with its device and size.
+  Together they tell you which analytics hold the DLPU and whether they are
+  actually running. The inference rate comes from the Arm Ethos-N driver (seen
+  on ARTPEC-9); the DLPU does not expose a busy percentage. larod is loaded at
+  runtime, so recorders and other devices without it are unaffected.
+
 ## 0.1.6 - 2026-11-16
 
 - Release 0.1.6.

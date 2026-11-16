@@ -46,17 +46,27 @@ device's own authenticated reverse proxy.
 | Group | Examples |
 |---|---|
 | CPU | total and per-core usage, user/system/iowait/irq/steal split, per-core frequency |
-| Memory | used, free, available, buffers, cached, swap |
+| Memory | used, free, available, buffers, cached, swap, and video memory (the Axis contiguous pool used by video, the encoder and analytics) |
 | Temperature | every thermal zone, plus named sensors such as Optics, ImageSensor, IR, heater and fan speed where the product reports them |
 | Network | per-interface throughput, packet rate, errors, drops, link speed, link state |
 | Disk | per-device read/write throughput, IOPS and utilisation |
 | Storage | per-filesystem total, used, free and usage percent, plus SD card wear and pre-EOL state |
 | PoE | per-port power, allocation, class and connection state, with totals against the budget, on devices that supply PoE such as recorders |
 | Power | the device's own power draw, plus requested power and the PoE class granted by the switch and over LLDP where the link reports them |
+| DLPU | inferences completed per second, the number and size of models loaded on the accelerator, and how many clients are connected to larod |
 | System | load average, uptime, process counts, context switches, socket counts |
 
-A device with no PoE ports, no power meter or no SD card simply reports none of
-those groups; the panels are built from what was found.
+A device with no PoE ports, no power meter, no DLPU or no SD card simply reports
+none of those groups; the panels are built from what was found.
+
+DLPU inferences are counted from the Arm Ethos-N driver's interrupt, which fires
+once per completed inference (checked against larod jobs on an ARTPEC-9). Chips
+with a different DLPU driver do not report it. The rate counts every inference
+from every app, so 10/s can mean one model at 10 fps or two at 5 fps; the
+**Loaded models** panel (and `data/dlpu`) lists what larod has loaded, with the
+device and size of each. The DLPU does not expose a busy percentage to apps, so
+none is reported. larod is loaded at runtime, so recorders and other devices
+without it are unaffected.
 
 Read-only filesystems are skipped: the Axis root filesystem sits at 100% by
 design, so charting it would be noise.
@@ -146,7 +156,7 @@ entities, which is around 17 on a camera:
 | Named sensors: CPU, Optics, ImageSensor, IR, heater, fan | The raw kernel thermal zones, unless a device reports no named sensors |
 | Usage of removable storage (SD card, disk) | `/mnt/flash` and `/mnt/persistent`, which barely move and cannot be acted on |
 | SD card wear and pre-EOL state | |
-| PoE total and budget, and the device's own power draw | Per-port PoE power, which is 32 entities on an eight-port recorder |
+| PoE total and budget, the device's own power draw, video memory usage and DLPU inferences | Per-port PoE power, which is 32 entities on an eight-port recorder |
 | Throughput of real interfaces | VLAN sub-interfaces such as `eth1_3` |
 
 `MqttDiscoveryAll` publishes every metric instead. Changing either discovery
@@ -210,6 +220,7 @@ least `viewer` access.
 | `current` | The latest sample as an id to value map |
 | `series?window=<seconds>&metrics=<id,id,...>` | History for the named metrics, with a shared timestamp array |
 | `processes?limit=<n>` | Top processes by CPU, with pid, name, CPU share and resident memory |
+| `dlpu` | Models larod has loaded, each with name, device, size in bytes and whether it runs on the accelerator; `available` is false where larod is absent |
 | `stream` | Server-sent events, one `data:` frame per sample |
 | `prometheus` | Prometheus text exposition format |
 | `health` | Liveness, metric count, sample count, memory use and the MQTT and InfluxDB connection states |
