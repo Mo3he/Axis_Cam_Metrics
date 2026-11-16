@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.7 - 2026-11-16
 
+- Release 0.1.7.
 - **Video memory:** cameras now report video memory, the reserved pool that
   video buffers, the encoder and analytics share. When it fills up, new streams
   and analytics fail to start even though ordinary memory looks fine, so it is
