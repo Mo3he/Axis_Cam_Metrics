@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 - 2026-11-16
 
+- Release 0.1.6.
 - **Power on cameras:** cameras now report their own power draw in watts, on a
   new Power chart and card. PoE was only read on recorders, which supply power
   to their ports; a camera draws PoE instead, so it never showed any power
