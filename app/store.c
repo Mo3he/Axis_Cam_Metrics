@@ -300,17 +300,42 @@ guint store_series(Store *store,
     if (tier_index >= STORE_TIERS || metric_index >= store->n_metrics)
         return 0;
 
+    if (max_points == 0)
+        return 0;
+
     g_mutex_lock(&store->lock);
     StoreTier *tier = &store->tiers[tier_index];
     guint written = 0;
     guint start = (tier->head + tier->capacity - tier->count) % tier->capacity;
 
-    for (guint i = 0; i < tier->count && written < max_points; i++) {
-        guint slot = (start + i) % tier->capacity;
-        if (tier->timestamps[slot] < since)
-            continue;
-        timestamps[written] = tier->timestamps[slot];
-        values[written] = tier->data[(gsize)slot * store->n_metrics + metric_index];
+    guint first = 0;
+    while (first < tier->count && tier->timestamps[(start + first) % tier->capacity] < since)
+        first++;
+    guint matched = tier->count - first;
+
+    /* Too many samples for the cap: average fixed-size buckets so the result
+     * still spans the whole window up to the newest sample. The bucketing
+     * depends only on the sample count, so every metric gets the same clock. */
+    guint stride = (matched + max_points - 1) / max_points;
+    if (stride < 1)
+        stride = 1;
+
+    for (guint i = first; i < tier->count; i += stride) {
+        guint end = MIN(i + stride, tier->count);
+        double sum = 0.0;
+        guint n = 0;
+        gint64 ts = 0;
+        for (guint j = i; j < end; j++) {
+            guint slot = (start + j) % tier->capacity;
+            float v = tier->data[(gsize)slot * store->n_metrics + metric_index];
+            if (!isnan(v)) {
+                sum += v;
+                n++;
+            }
+            ts = tier->timestamps[slot];
+        }
+        timestamps[written] = ts;
+        values[written] = n ? (float)(sum / n) : NAN;
         written++;
     }
     g_mutex_unlock(&store->lock);

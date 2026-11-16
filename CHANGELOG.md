@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **30 day chart:** the 30d view now runs up to the present. The series
+  response is capped at 4000 points, and the 5 minute tier holds up to 8640,
+  so only the oldest ~14 days were returned. Windows larger than the cap are
+  now averaged down so they cover the whole range.
+
 ## 0.1.4 - 2026-11-12
 
 - Release 0.1.4.

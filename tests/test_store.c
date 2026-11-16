@@ -119,6 +119,9 @@ static void test_series_query(void) {
 
     n = store_series(store, 0, 0, 0, timestamps, values, 3);
     CHECK(n == 3, "max_points is respected (%u)", n);
+    CHECK(timestamps[n - 1] == base + 9, "capped series still ends at the newest sample");
+    CHECK(close_enough(values[0], 1.5) && close_enough(values[2], 8.5),
+          "capped series averages buckets (%.1f, %.1f)", values[0], values[2]);
 
     store_free(store);
     metrics_registry_clear(&registry);

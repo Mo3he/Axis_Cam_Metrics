@@ -66,7 +66,8 @@ gboolean store_latest(Store *store, float *out, gint64 *timestamp);
 /* Picks the finest tier with at most ~2000 points, else the coarsest tier. */
 guint store_tier_for_window(const Store *store, guint window_s);
 
-/* Writes up to max_points samples for one metric, oldest first. Returns the count. */
+/* Writes up to max_points samples for one metric, oldest first, averaging
+ * neighbouring samples when the window holds more than max_points. Returns the count. */
 guint store_series(Store *store,
                    guint tier_index,
                    guint metric_index,
