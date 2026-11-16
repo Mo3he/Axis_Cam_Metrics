@@ -156,6 +156,41 @@ static void write_header(Persist *persist) {
     persist->appends_since_header = 0;
 }
 
+/* Renames path to "<path>.stale-<time>" so a fresh one can be created. */
+static gboolean move_aside(const char *path) {
+    GDateTime *now = g_date_time_new_now_local();
+    gchar *stamp = g_date_time_format(now, "%Y%m%d%H%M%S");
+    gchar *target = g_strdup_printf("%s.stale-%s", path, stamp);
+    gboolean ok = rename(path, target) == 0;
+    if (ok)
+        syslog(LOG_WARNING, "%s belonged to another user (left by an earlier install), moved to %s",
+               path, target);
+    else
+        syslog(LOG_WARNING, "cannot move unusable %s aside: %s", path, g_strerror(errno));
+    g_free(target);
+    g_free(stamp);
+    g_date_time_unref(now);
+    return ok;
+}
+
+/* AXIS OS gives each app a fresh uid on install and may hand an old one to
+ * another app, so history left by an earlier install can belong to somebody
+ * else. Same-directory renames only need write access to the storage root,
+ * which the storage group has. */
+static gboolean ensure_own_directory(const char *directory) {
+    struct stat st;
+    if (stat(directory, &st) == 0 && st.st_uid != geteuid() &&
+        access(directory, R_OK | W_OK | X_OK) != 0) {
+        if (!move_aside(directory))
+            return FALSE;
+    }
+    if (g_mkdir_with_parents(directory, 0750) != 0) {
+        syslog(LOG_WARNING, "cannot create %s: %s, history stays in memory", directory, g_strerror(errno));
+        return FALSE;
+    }
+    return TRUE;
+}
+
 Persist *persist_open(const MetricRegistry *registry, const StoreTier *tier, const char *filename) {
     static gboolean absence_logged;
 
@@ -171,10 +206,8 @@ Persist *persist_open(const MetricRegistry *registry, const StoreTier *tier, con
 
     char directory[512];
     g_snprintf(directory, sizeof(directory), "%s/%s", base, APP_SUBDIR);
-    if (g_mkdir_with_parents(directory, 0750) != 0) {
-        syslog(LOG_WARNING, "cannot create %s: %s, history stays in memory", directory, g_strerror(errno));
+    if (!ensure_own_directory(directory))
         return NULL;
-    }
 
     Persist *persist = g_new0(Persist, 1);
     persist->n_metrics = registry->count;
@@ -186,6 +219,8 @@ Persist *persist_open(const MetricRegistry *registry, const StoreTier *tier, con
     g_snprintf(persist->path, sizeof(persist->path), "%s/%s", directory, filename);
 
     persist->fd = open(persist->path, O_RDWR | O_CREAT | O_CLOEXEC, 0640);
+    if (persist->fd < 0 && errno == EACCES && move_aside(persist->path))
+        persist->fd = open(persist->path, O_RDWR | O_CREAT | O_CLOEXEC, 0640);
     if (persist->fd < 0) {
         syslog(LOG_WARNING, "cannot open %s: %s, history stays in memory", persist->path,
                g_strerror(errno));

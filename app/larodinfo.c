@@ -42,10 +42,11 @@ static void clear_entry(gpointer data) {
     g_free(entry->device);
 }
 
-/* Covers the DLPU backends ("a9-dlpu-native", "axis-a8-dlpu-tflite"), the
- * ARTPEC-7 GPU and Ambarella CVflow, while leaving out the CPU backends. */
+/* Covers the DLPU backends ("a9-dlpu-native", "cv75-dlpu-native"), the ARTPEC-7
+ * GPU and Ambarella CVflow. CPU backends and the image preprocessing backends
+ * ("cpu-proc", "cv75-dlpu-proc") are left out: they run no neural network. */
 static gboolean is_accelerator(const char *device) {
-    return device && !strstr(device, "cpu");
+    return device && !strstr(device, "cpu") && !g_str_has_suffix(device, "-proc");
 }
 
 static gboolean ensure_connected(LarodInfo *info) {

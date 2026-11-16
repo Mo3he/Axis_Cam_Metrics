@@ -4,17 +4,25 @@
 
 - Release 0.1.7.
 - **Video memory:** cameras now report video memory, the reserved pool that
-  video buffers, the encoder and analytics share. When it fills up, new streams
-  and analytics fail to start even though ordinary memory looks fine, so it is
-  shown as a chart and a card and is a default Home Assistant entity.
-- **DLPU:** devices with a deep learning processor now show how many
-  inferences it completes per second, how many models are loaded on it and
-  their size, and how many clients are connected to larod. A new **Loaded
-  models** panel lists each model larod has loaded with its device and size.
-  Together they tell you which analytics hold the DLPU and whether they are
-  actually running. The inference rate comes from the Arm Ethos-N driver (seen
-  on ARTPEC-9); the DLPU does not expose a busy percentage. larod is loaded at
-  runtime, so recorders and other devices without it are unaffected.
+  video buffers, the encoder and analytics share (Cmax on ARTPEC, DSP DRAM on
+  Ambarella). When it fills up, new streams and analytics fail to start even
+  though ordinary memory looks fine, so it is shown as a chart and a card and
+  is a default Home Assistant entity.
+- **DLPU:** devices with a deep learning processor now show its work rate, how
+  many neural network models are loaded on it and their size, and how many
+  clients are connected to larod. A new **Loaded models** panel lists each
+  model larod has loaded with its device and size. Together they tell you which
+  analytics hold the DLPU and whether they are actually running. On ARTPEC-9
+  the rate is inferences per second; on Ambarella it is hardware jobs per
+  second, and one image preprocessing job alone makes about three, so it shows
+  load rather than inferences. The DLPU does not expose a busy
+  percentage. larod is loaded at runtime, so recorders and other devices
+  without it are unaffected.
+- **History on the SD card:** a history folder left by an earlier install can
+  end up owned by a different app, because AXIS OS reuses app users. The app
+  could then not open it and kept history in memory only, losing it on every
+  restart. It now moves the unreadable folder aside as `Metrics.stale-<time>`
+  and starts a new history.
 
 ## 0.1.6 - 2026-11-16
 

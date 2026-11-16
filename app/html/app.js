@@ -232,6 +232,8 @@
 
     var dlpu = pick(["dlpu.inferences"], ["inferences"]);
     if (dlpu.length) specs.push({ title: "DLPU inferences", unit: "/s", series: dlpu });
+    var dlpuJobs = pick(["dlpu.jobs"], ["hardware jobs"]);
+    if (dlpuJobs.length) specs.push({ title: "DLPU jobs", unit: "/s", series: dlpuJobs });
 
     /* Thermal zones and named sensors share this group; filtering on the unit
      * keeps fan RPM and heater state out. */
@@ -484,13 +486,15 @@
             severityFor(v["mem.video_usage"]));
         }
 
-        if (v["dlpu.inferences"] != null || v["dlpu.models"] != null) {
+        var dlpuRateId = v["dlpu.inferences"] != null ? "dlpu.inferences" : v["dlpu.jobs"] != null ? "dlpu.jobs" : null;
+        if (dlpuRateId || v["dlpu.models"] != null) {
           var models = v["dlpu.models"];
           var modelText = models != null
             ? fmtCount(models) + (models === 1 ? " model, " : " models, ") + fmtBytes(v["dlpu.model_bytes"])
             : "";
-          html += v["dlpu.inferences"] != null
-            ? card("DLPU inferences", fmtCount(v["dlpu.inferences"]) + "/s", modelText || "per second")
+          html += dlpuRateId
+            ? card(dlpuRateId === "dlpu.inferences" ? "DLPU inferences" : "DLPU jobs",
+                fmtCount(v[dlpuRateId]) + "/s", modelText || "per second")
             : card("DLPU", fmtCount(models) + (models === 1 ? " model" : " models"),
                 fmtBytes(v["dlpu.model_bytes"]) + " loaded");
         }

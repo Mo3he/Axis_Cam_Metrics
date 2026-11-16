@@ -108,8 +108,12 @@ struct Collector {
     guint idx_power_draw, idx_power_requested, idx_power_pse_class, idx_power_lldp_class;
 
     guint idx_video_total, idx_video_used, idx_video_usage;
+    enum { VIDEO_NONE, VIDEO_CMAX, VIDEO_AMBARELLA } video_source;
 
-    guint idx_dlpu_inferences;
+    /* Which counter the DLPU rate comes from: inferences on Ethos-N, hardware
+     * jobs on Ambarella CVflow. */
+    const char *dlpu_irq;
+    guint idx_dlpu_rate;
     guint64 prev_dlpu_irqs;
     LarodInfo *larod;
     guint idx_dlpu_models, idx_dlpu_model_bytes, idx_dlpu_sessions;
@@ -654,33 +658,70 @@ static void sample_flash_wear(Collector *c, float *values) {
 
 /* ------------------------------------------------- video memory and the DLPU */
 
-static gboolean meminfo_has(const char *key) {
+#define AMBARELLA_VIDEO_MEMORY "/proc/ambarella/iav_mem"
+
+static guint64 meminfo_kb(const char *key) {
     FILE *f = fopen("/proc/meminfo", "re");
     if (!f)
-        return FALSE;
+        return 0;
     char line[128];
-    gboolean found = FALSE;
-    while (!found && fgets(line, sizeof(line), f))
-        found = g_str_has_prefix(line, key);
+    guint64 value = 0;
+    gsize key_len = strlen(key);
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, key, key_len) == 0) {
+            value = g_ascii_strtoull(line + key_len, NULL, 10);
+            break;
+        }
+    }
     fclose(f);
-    return found;
+    return value;
 }
 
-/* Axis reserves a contiguous pool ("Cmax") for video buffers, the encoder and
- * analytics. When it runs out, streams fail to start while ordinary RAM still
- * looks fine. */
+/* Reported as "DSP DRAM Used: 577 MB, Limited: 714 MB." */
+static gboolean read_ambarella_video_memory(guint64 *used, guint64 *total) {
+    char buf[512];
+    if (!read_text(AMBARELLA_VIDEO_MEMORY, buf, sizeof(buf)))
+        return FALSE;
+    const char *line = strstr(buf, "DSP DRAM Used:");
+    guint used_mb = 0, total_mb = 0;
+    if (!line || sscanf(line, "DSP DRAM Used: %u MB, Limited: %u MB", &used_mb, &total_mb) != 2 ||
+        total_mb == 0)
+        return FALSE;
+    *used = (guint64)used_mb * 1024 * 1024;
+    *total = (guint64)total_mb * 1024 * 1024;
+    return TRUE;
+}
+
+/* Video buffers, the encoder and analytics share a reserved pool: "Cmax" on
+ * ARTPEC, DSP DRAM on Ambarella (which keeps a zero Cmax line). When it runs
+ * out, streams fail to start while ordinary RAM still looks fine. */
 static void discover_video_memory(Collector *c) {
-    if (!meminfo_has("CmaxTotal:"))
+    guint64 used, total;
+    if (meminfo_kb("CmaxTotal:") > 0)
+        c->video_source = VIDEO_CMAX;
+    else if (read_ambarella_video_memory(&used, &total))
+        c->video_source = VIDEO_AMBARELLA;
+    else
         return;
     c->idx_video_total = reg(c, "mem.video_total", "Video memory total", "B", "memory");
     c->idx_video_used = reg(c, "mem.video_used", "Video memory used", "B", "memory");
     c->idx_video_usage = reg(c, "mem.video_usage", "Video memory usage", "%", "memory");
 }
 
-/* Sums every CPU's count on the interrupt lines owned by the Ethos-N DLPU
- * driver. It raises one per completed inference (checked against larod jobs on
- * an ARTPEC-9), so the rate is inferences per second. */
-static gboolean read_dlpu_irqs(guint64 *out) {
+static void set_video_memory(Collector *c, float *values, guint64 used, guint64 total) {
+    set(values, c->idx_video_total, (double)total);
+    set(values, c->idx_video_used, (double)used);
+    set(values, c->idx_video_usage, total ? 100.0 * (double)used / (double)total : NAN);
+}
+
+static void sample_ambarella_video_memory(Collector *c, float *values) {
+    guint64 used, total;
+    if (c->video_source == VIDEO_AMBARELLA && read_ambarella_video_memory(&used, &total))
+        set_video_memory(c, values, used, total);
+}
+
+/* Sums every CPU's count on the interrupt lines named irq. */
+static gboolean read_irq_count(const char *irq, guint64 *out) {
     FILE *f = fopen("/proc/interrupts", "re");
     if (!f)
         return FALSE;
@@ -695,7 +736,7 @@ static gboolean read_dlpu_irqs(guint64 *out) {
     gboolean found = FALSE;
     guint64 total = 0;
     while (fgets(line, sizeof(line), f)) {
-        if (!strstr(line, "ethosn"))
+        if (!strstr(line, irq))
             continue;
         char *cursor = strchr(line, ':');
         if (!cursor)
@@ -718,8 +759,17 @@ static gboolean read_dlpu_irqs(guint64 *out) {
 
 static void discover_dlpu(Collector *c) {
     guint64 irqs;
-    if (read_dlpu_irqs(&irqs))
-        c->idx_dlpu_inferences = reg(c, "dlpu.inferences", "DLPU inferences", "/s", "dlpu");
+    /* Ethos-N raises one interrupt per completed inference (checked against
+     * larod jobs on an ARTPEC-9). CVflow raises one per hardware job, and one
+     * image preprocessing job alone makes about three (checked on a CV75), so
+     * that rate is jobs rather than inferences. */
+    if (read_irq_count("ethosn", &irqs)) {
+        c->dlpu_irq = "ethosn";
+        c->idx_dlpu_rate = reg(c, "dlpu.inferences", "DLPU inferences", "/s", "dlpu");
+    } else if (read_irq_count("cavalry_job_done", &irqs)) {
+        c->dlpu_irq = "cavalry_job_done";
+        c->idx_dlpu_rate = reg(c, "dlpu.jobs", "DLPU jobs", "/s", "dlpu");
+    }
 
     c->larod = larod_info_open();
     if (c->larod) {
@@ -730,13 +780,13 @@ static void discover_dlpu(Collector *c) {
 }
 
 static void sample_dlpu(Collector *c, float *values, double seconds, gboolean first) {
-    if (!c->idx_dlpu_inferences)
+    if (!c->idx_dlpu_rate)
         return;
     guint64 irqs;
-    if (!read_dlpu_irqs(&irqs))
+    if (!read_irq_count(c->dlpu_irq, &irqs))
         return;
     if (!first)
-        set(values, c->idx_dlpu_inferences, rate(irqs, c->prev_dlpu_irqs, seconds));
+        set(values, c->idx_dlpu_rate, rate(irqs, c->prev_dlpu_irqs, seconds));
     c->prev_dlpu_irqs = irqs;
 }
 
@@ -923,12 +973,8 @@ static void sample_memory(Collector *c, float *values) {
     }
     fclose(f);
 
-    if (c->idx_video_total) {
-        set(values, c->idx_video_total, (double)video_total * 1024.0);
-        set(values, c->idx_video_used, (double)video_used * 1024.0);
-        set(values, c->idx_video_usage,
-            video_total ? 100.0 * (double)video_used / (double)video_total : NAN);
-    }
+    if (c->video_source == VIDEO_CMAX)
+        set_video_memory(c, values, video_used * 1024, video_total * 1024);
 
     set(values, c->idx_mem_total, (double)total * 1024.0);
     set(values, c->idx_mem_free, (double)free_kb * 1024.0);
@@ -1141,6 +1187,7 @@ void collector_sample(Collector *c, float *values) {
     sample_ifaces(c, values, seconds, first);
     sample_disks(c, values, seconds, first);
     sample_mounts(c, values);
+    sample_ambarella_video_memory(c, values);
     sample_dlpu(c, values, seconds, first);
 
     if (now >= c->slow_deadline) {
