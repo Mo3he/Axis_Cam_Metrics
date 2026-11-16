@@ -28,8 +28,8 @@ device's own authenticated reverse proxy.
   so the same package renders correctly on a camera with an SD card and image
   sensor thermals and on a recorder with a SATA disk and eight PoE port VLANs.
   A few readings with no kernel equivalent, such as named temperature sensors,
-  fan speed and per-port PoE, come from VAPIX using a service account the device
-  issues over D-Bus, so no credentials are stored.
+  fan speed, per-port PoE and the device's own power draw, come from VAPIX using
+  a service account the device issues over D-Bus, so no credentials are stored.
 - **Charts over 5m, 15m, 30m, 1h, 6h, 24h, 7d and 30d**, backed by three ring
   buffers (1s, 15s and 5min resolution) that are sized against the device's RAM
   and written to an SD card or disk so they survive a reboot.
@@ -51,11 +51,12 @@ device's own authenticated reverse proxy.
 | Network | per-interface throughput, packet rate, errors, drops, link speed, link state |
 | Disk | per-device read/write throughput, IOPS and utilisation |
 | Storage | per-filesystem total, used, free and usage percent, plus SD card wear and pre-EOL state |
-| PoE | per-port power, allocation, class and connection state, with totals against the budget |
+| PoE | per-port power, allocation, class and connection state, with totals against the budget, on devices that supply PoE such as recorders |
+| Power | the device's own power draw, plus requested power and the PoE class granted by the switch and over LLDP where the link reports them |
 | System | load average, uptime, process counts, context switches, socket counts |
 
-A device with no PoE ports or no SD card simply reports neither group; the
-panels are built from what was found.
+A device with no PoE ports, no power meter or no SD card simply reports none of
+those groups; the panels are built from what was found.
 
 Read-only filesystems are skipped: the Axis root filesystem sits at 100% by
 design, so charting it would be noise.
@@ -145,7 +146,7 @@ entities, which is around 17 on a camera:
 | Named sensors: CPU, Optics, ImageSensor, IR, heater, fan | The raw kernel thermal zones, unless a device reports no named sensors |
 | Usage of removable storage (SD card, disk) | `/mnt/flash` and `/mnt/persistent`, which barely move and cannot be acted on |
 | SD card wear and pre-EOL state | |
-| PoE total and budget | Per-port PoE power, which is 32 entities on an eight-port recorder |
+| PoE total and budget, and the device's own power draw | Per-port PoE power, which is 32 entities on an eight-port recorder |
 | Throughput of real interfaces | VLAN sub-interfaces such as `eth1_3` |
 
 `MqttDiscoveryAll` publishes every metric instead. Changing either discovery

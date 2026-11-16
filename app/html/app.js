@@ -245,6 +245,9 @@
       specs.push({ title: "PoE power", unit: "W", series: poe });
     }
 
+    var power = pick(["power.draw", "power.requested"], ["draw", "requested"]);
+    if (power.length) specs.push({ title: "Power", unit: "W", series: power });
+
     var throughput = byDevice("net", "rx_bps", ["rx_bps", "tx_bps"], ["in", "out"]);
     if (throughput.length) specs.push({ title: "Network throughput", unit: "B/s", series: throughput });
 
@@ -461,6 +464,12 @@
           html += card("PoE", fmtCount(v["poe.total"]) + " W",
             "of " + fmtCount(v["poe.budget"]) + " W budget",
             severityFor(v["poe.budget"] ? (100 * v["poe.total"]) / v["poe.budget"] : null));
+        }
+
+        if (v["power.draw"] != null) {
+          var poeClass = v["power.lldp_class"] != null ? v["power.lldp_class"] : v["power.pse_class"];
+          html += card("Power", fmtCount(v["power.draw"]) + " W",
+            poeClass != null ? "PoE class " + fmtCount(poeClass) : "current draw");
         }
 
         /* Wear moves over years, so no chart. pre_eol 1 is normal; 2 and 3 mean

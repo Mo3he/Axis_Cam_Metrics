@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Power on cameras:** cameras now report their own power draw in watts, on a
+  new Power chart and card. PoE was only read on recorders, which supply power
+  to their ports; a camera draws PoE instead, so it never showed any power
+  readings. The PoE class granted by the switch and over LLDP, and the power the
+  camera requested, are added where the link reports them. Power draw is also a
+  default Home Assistant entity, and watt values now use Home Assistant's power
+  device class.
+
 ## 0.1.5 - 2026-11-16
 
 - Release 0.1.5.

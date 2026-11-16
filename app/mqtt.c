@@ -47,7 +47,7 @@ static gboolean is_essential(const char *id, gboolean named_sensors) {
     static const char *exact[] = {"cpu.usage",       "mem.usage",     "mem.used",
                                   "load.1",          "sys.uptime",    "flash.life_used",
                                   "flash.pre_eol",   "poe.total",     "poe.budget",
-                                  NULL};
+                                  "power.draw",      NULL};
     for (int i = 0; exact[i]; i++) {
         if (strcmp(id, exact[i]) == 0)
             return TRUE;
@@ -88,6 +88,7 @@ static const char *device_class_for(const char *unit) {
     if (strcmp(unit, "B/s") == 0) return "data_rate";
     if (strcmp(unit, "s") == 0) return "duration";
     if (strcmp(unit, "MHz") == 0) return "frequency";
+    if (strcmp(unit, "W") == 0) return "power";
     return NULL;
 }
 

@@ -1,6 +1,6 @@
 /*
  * Minimal local VAPIX client for metrics with no /proc equivalent (named
- * sensors, fan RPM, PoE). Uses the D-Bus service account, so no stored credentials.
+ * sensors, fan RPM, PoE, power draw). Uses the D-Bus service account, so no stored credentials.
  */
 
 #include "vapix.h"
@@ -75,7 +75,7 @@ gboolean vapix_available(void) {
     return handle != NULL && credentials != NULL;
 }
 
-gchar *vapix_get(const char *endpoint) {
+static gchar *request(const char *endpoint, const char *json_body) {
     if (!vapix_available())
         return NULL;
 
@@ -83,6 +83,7 @@ gchar *vapix_get(const char *endpoint) {
     g_snprintf(url, sizeof(url), "http://%s/axis-cgi/%s", VAPIX_HOST, endpoint);
 
     Buffer buffer = {NULL, 0};
+    struct curl_slist *headers = NULL;
     curl_easy_reset(handle);
     curl_easy_setopt(handle, CURLOPT_URL, url);
     curl_easy_setopt(handle, CURLOPT_USERPWD, credentials);
@@ -91,16 +92,30 @@ gchar *vapix_get(const char *endpoint) {
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(handle, CURLOPT_TIMEOUT, VAPIX_TIMEOUT);
     curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
+    if (json_body) {
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, json_body);
+    }
 
     CURLcode rc = curl_easy_perform(handle);
     long status = 0;
     curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status);
+    curl_slist_free_all(headers);
 
     if (rc != CURLE_OK || status != 200) {
         g_free(buffer.data);
         return NULL;
     }
     return buffer.data;
+}
+
+gchar *vapix_get(const char *endpoint) {
+    return request(endpoint, NULL);
+}
+
+gchar *vapix_post_json(const char *endpoint, const char *json_body) {
+    return request(endpoint, json_body);
 }
 
 void vapix_cleanup(void) {

@@ -65,6 +65,8 @@ typedef struct {
     guint idx_power, idx_allocated, idx_class, idx_connected;
 } PoePort;
 
+#define POWER_STATUS_REQUEST "{\"apiVersion\":\"1.0\",\"method\":\"getPowerStatus\"}"
+
 struct Collector {
     MetricRegistry *registry;
 
@@ -101,6 +103,8 @@ struct Collector {
     PoePort poe[MAX_POE_PORTS];
     guint n_poe;
     guint idx_poe_total, idx_poe_budget;
+
+    guint idx_power_draw, idx_power_requested, idx_power_pse_class, idx_power_lldp_class;
 
     guint idx_flash_life, idx_flash_eol;
     char flash_life_path[160], flash_eol_path[160];
@@ -529,6 +533,63 @@ static void sample_poe(Collector *c, float *values) {
     }
 }
 
+/* Parses the number after the first "key": in a JSON body. */
+static double json_value(const char *body, const char *key) {
+    char quoted[48];
+    g_snprintf(quoted, sizeof(quoted), "\"%s\"", key);
+    const char *found = strstr(body, quoted);
+    if (!found)
+        return NAN;
+    const char *colon = strchr(found + strlen(quoted), ':');
+    if (!colon)
+        return NAN;
+    char *end = NULL;
+    double value = g_ascii_strtod(colon + 1, &end);
+    return end == colon + 1 ? NAN : value;
+}
+
+/* The device reports -1 for readings it does not have. */
+static double power_reading(const char *body, const char *key) {
+    double value = json_value(body, key);
+    return value < 0 ? NAN : value;
+}
+
+/* A camera draws PoE rather than supplying it, so instead of ports it reports
+ * its own consumption and the class it was granted. */
+static void discover_power(Collector *c) {
+    gchar *body = vapix_post_json("power-settings.cgi", POWER_STATUS_REQUEST);
+    if (!body || isnan(power_reading(body, "currentPower"))) {
+        g_free(body);
+        return;
+    }
+
+    c->idx_power_draw = reg(c, "power.draw", "Power draw", "W", "power");
+    /* Only on a PoE link that reports them, so they are not shown empty on DC. */
+    if (!isnan(power_reading(body, "powerRequested")))
+        c->idx_power_requested = reg(c, "power.requested", "Power requested", "W", "power");
+    if (!isnan(power_reading(body, "psePoeClass")))
+        c->idx_power_pse_class = reg(c, "power.pse_class", "PoE class (switch)", "", "power");
+    if (!isnan(power_reading(body, "lldpPoeClass")))
+        c->idx_power_lldp_class = reg(c, "power.lldp_class", "PoE class (LLDP)", "", "power");
+    g_free(body);
+}
+
+static void sample_power(Collector *c, float *values) {
+    if (!c->idx_power_draw)
+        return;
+    gchar *body = vapix_post_json("power-settings.cgi", POWER_STATUS_REQUEST);
+    if (!body)
+        return;
+    set(values, c->idx_power_draw, power_reading(body, "currentPower"));
+    if (c->idx_power_requested)
+        set(values, c->idx_power_requested, power_reading(body, "powerRequested"));
+    if (c->idx_power_pse_class)
+        set(values, c->idx_power_pse_class, power_reading(body, "psePoeClass"));
+    if (c->idx_power_lldp_class)
+        set(values, c->idx_power_lldp_class, power_reading(body, "lldpPoeClass"));
+    g_free(body);
+}
+
 /* eMMC and SD cards report wear as JEDEC life-time bands, which is the only
  * early warning before a card starts failing. */
 static void discover_flash_wear(Collector *c) {
@@ -596,6 +657,10 @@ static void mark_slow(Collector *c) {
     }
     if (c->idx_poe_total) c->is_slow[c->idx_poe_total] = TRUE;
     if (c->idx_poe_budget) c->is_slow[c->idx_poe_budget] = TRUE;
+    if (c->idx_power_draw) c->is_slow[c->idx_power_draw] = TRUE;
+    if (c->idx_power_requested) c->is_slow[c->idx_power_requested] = TRUE;
+    if (c->idx_power_pse_class) c->is_slow[c->idx_power_pse_class] = TRUE;
+    if (c->idx_power_lldp_class) c->is_slow[c->idx_power_lldp_class] = TRUE;
     if (c->idx_flash_life) c->is_slow[c->idx_flash_life] = TRUE;
     if (c->idx_flash_eol) c->is_slow[c->idx_flash_eol] = TRUE;
 }
@@ -611,6 +676,7 @@ Collector *collector_new(MetricRegistry *registry) {
     discover_mounts(c);
     discover_sensors(c);
     discover_poe(c);
+    discover_power(c);
     discover_flash_wear(c);
 
     c->slow_cache = g_new(float, registry->count);
@@ -950,6 +1016,7 @@ void collector_sample(Collector *c, float *values) {
         c->slow_deadline = now + (gint64)SLOW_INTERVAL_S * G_USEC_PER_SEC;
         sample_sensors(c, c->slow_cache);
         sample_poe(c, c->slow_cache);
+        sample_power(c, c->slow_cache);
         sample_flash_wear(c, c->slow_cache);
     }
     for (guint i = 0; i < c->registry->count; i++) {
