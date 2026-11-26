@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.8 - 2026-11-26
 
+- Release 0.1.8.
 - **InfluxDB settings:** the "Write to InfluxDB" checkbox now saves, so
   InfluxDB output can be switched on from the settings page. Saving settings
   no longer clears a stored InfluxDB API token or password; leave the field
