@@ -28,6 +28,7 @@ struct Mqtt {
     char client_id[64];
     gint connected;      /* Atomic: written by paho callbacks. */
     gint just_connected; /* Atomic: set on (re)connect, consumed by mqtt_tick. */
+    gint connect_failed; /* Atomic: the most recent connection attempt failed. */
     gboolean discovery_sent;
     gint64 last_publish;
 };
@@ -234,13 +235,23 @@ static void publish_discovery(Mqtt *mqtt, gboolean withdraw_stale) {
 static void on_connected(void *context, char *cause) {
     (void)cause;
     Mqtt *mqtt = context;
+    g_atomic_int_set(&mqtt->connect_failed, FALSE);
     g_atomic_int_set(&mqtt->connected, TRUE);
     g_atomic_int_set(&mqtt->just_connected, TRUE);
+}
+
+static void on_connect_failure(void *context, MQTTAsync_failureData *response) {
+    Mqtt *mqtt = context;
+    g_atomic_int_set(&mqtt->connect_failed, TRUE);
+    syslog(LOG_WARNING, "mqtt connection attempt to %s failed (%d): %s", mqtt->address,
+           response ? response->code : MQTTASYNC_FAILURE,
+           response && response->message ? response->message : "unknown error");
 }
 
 static void on_connection_lost(void *context, char *cause) {
     Mqtt *mqtt = context;
     g_atomic_int_set(&mqtt->connected, FALSE);
+    g_atomic_int_set(&mqtt->connect_failed, FALSE);
     syslog(LOG_WARNING, "mqtt connection lost: %s", cause ? cause : "unknown");
 }
 
@@ -293,6 +304,7 @@ static void disconnect(Mqtt *mqtt) {
     mqtt->client = NULL;
     g_atomic_int_set(&mqtt->connected, FALSE);
     g_atomic_int_set(&mqtt->just_connected, FALSE);
+    g_atomic_int_set(&mqtt->connect_failed, FALSE);
     mqtt->discovery_sent = FALSE;
 }
 
@@ -330,6 +342,7 @@ static void connect_now(Mqtt *mqtt) {
     options.minRetryInterval = CONNECT_RETRY_MIN_S;
     options.maxRetryInterval = CONNECT_RETRY_MAX_S;
     options.context = mqtt;
+    options.onFailure = on_connect_failure;
     /* MQTT forbids a password without a username, and brokers answer it with a
      * disconnect that looks like an unreachable host. */
     if (mqtt->config.username[0]) {
@@ -356,8 +369,10 @@ static void connect_now(Mqtt *mqtt) {
     }
 
     int rc = MQTTAsync_connect(mqtt->client, &options);
-    if (rc != MQTTASYNC_SUCCESS)
+    if (rc != MQTTASYNC_SUCCESS) {
+        g_atomic_int_set(&mqtt->connect_failed, TRUE);
         syslog(LOG_WARNING, "mqtt connect to %s failed (%d), retrying in background", mqtt->address, rc);
+    }
 }
 
 void mqtt_apply(Mqtt *mqtt, const MqttConfig *config) {
@@ -449,7 +464,7 @@ void mqtt_publish_alert(Mqtt *mqtt,
 const char *mqtt_state(const Mqtt *mqtt) {
     if (!mqtt->config.enabled)
         return "disabled";
-    if (!mqtt->client)
+    if (!mqtt->client || g_atomic_int_get(&mqtt->connect_failed))
         return "error";
     return g_atomic_int_get(&mqtt->connected) ? "connected" : "connecting";
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **MQTT:** failed broker connections now show an error instead of staying
+  stuck on "connecting". The app keeps retrying and returns to "connected"
+  after a successful connection.
+
 ## 0.1.8 - 2026-11-26
 
 - Release 0.1.8.
