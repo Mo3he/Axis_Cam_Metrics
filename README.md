@@ -167,7 +167,8 @@ entities, which is around 17 on a camera:
 | Throughput of real interfaces | VLAN sub-interfaces such as `eth1_3` |
 
 `MqttDiscoveryAll` publishes every metric instead. Changing either discovery
-setting republishes immediately rather than waiting for a reconnect.
+setting, or which metrics are transmitted, republishes immediately rather than
+waiting for a reconnect.
 
 Discovery configs are retained, so a config this device published before but no
 longer wants is withdrawn with an empty payload. Without that, a metric dropped
@@ -346,6 +347,9 @@ are published three ways:
   and can trigger a recording or notification with no involvement from this app.
 - As a retained MQTT message on `<prefix>/alert/<rule>`.
 - To the system log.
+
+Disabling or deleting a rule that is firing clears it first. Deleting a rule
+also removes its retained MQTT message.
 
 A default set is created on first run and kept in step with the code and the
 device: CPU usage, memory usage, temperature, and one rule per mounted

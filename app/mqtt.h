@@ -35,6 +35,13 @@ void mqtt_publish_alert(Mqtt *mqtt,
                         double value,
                         gboolean firing);
 
+/* Clears the retained alert message of a deleted rule. */
+void mqtt_remove_alert(Mqtt *mqtt, const char *rule_id);
+
+/* Republishes discovery now, for a change that is not an MqttConfig change,
+ * such as the transmit selection. */
+void mqtt_rediscover(Mqtt *mqtt);
+
 const char *mqtt_state(const Mqtt *mqtt);
 
 #endif /* MQTT_H */

@@ -405,6 +405,22 @@ void mqtt_tick(Mqtt *mqtt) {
     g_free(json);
 }
 
+void mqtt_rediscover(Mqtt *mqtt) {
+    if (mqtt && mqtt->config.enabled && mqtt->config.discovery && g_atomic_int_get(&mqtt->connected))
+        publish_discovery(mqtt, TRUE);
+}
+
+void mqtt_remove_alert(Mqtt *mqtt, const char *rule_id) {
+    if (!mqtt || !g_atomic_int_get(&mqtt->connected))
+        return;
+
+    char leaf[128];
+    char alert_topic[256];
+    g_snprintf(leaf, sizeof(leaf), "alert/%s", rule_id);
+    topic(mqtt, alert_topic, sizeof(alert_topic), leaf);
+    publish(mqtt, alert_topic, "", 1, 1, 0);
+}
+
 void mqtt_publish_alert(Mqtt *mqtt,
                         const char *rule_id,
                         const char *name,

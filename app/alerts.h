@@ -36,8 +36,9 @@ gchar *alerts_json(Alerts *alerts);
 /* Applies one form-encoded change: action=save|delete plus rule fields. */
 gboolean alerts_apply(Alerts *alerts, const char *body);
 
-/* Called whenever a rule starts or stops firing. */
-typedef void (*AlertNotify)(const AlertRule *rule, gboolean firing, gpointer user_data);
+/* Called whenever a rule starts or stops firing, or is deleted. */
+typedef enum { ALERT_CLEARED, ALERT_FIRING, ALERT_REMOVED } AlertChange;
+typedef void (*AlertNotify)(const AlertRule *rule, AlertChange change, gpointer user_data);
 void alerts_set_notify(Alerts *alerts, AlertNotify notify, gpointer user_data);
 
 #endif /* ALERTS_H */

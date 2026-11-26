@@ -140,9 +140,13 @@ static void on_tier_sample(const float *values, gint64 timestamp, gpointer user_
 
 /* Alerts already reach the device event system; this mirrors them to MQTT so a
  * broker-side consumer does not have to poll. */
-static void on_alert_changed(const AlertRule *rule, gboolean firing, gpointer user_data) {
+static void on_alert_changed(const AlertRule *rule, AlertChange change, gpointer user_data) {
     (void)user_data;
-    mqtt_publish_alert(mqtt, rule->id, rule->name, rule->metric, rule->last_value, firing);
+    if (change == ALERT_REMOVED)
+        mqtt_remove_alert(mqtt, rule->id);
+    else
+        mqtt_publish_alert(mqtt, rule->id, rule->name, rule->metric, rule->last_value,
+                           change == ALERT_FIRING);
 }
 
 /* Storage can mount long after boot (over an hour on a recorder) or be inserted
@@ -624,9 +628,10 @@ static gboolean handle_request(GSocketConnection *connection,
         gchar *scope = api_query_param(body, "scope");
         gchar *disabled = api_query_param(body, "disabled");
         if (scope && disabled) {
-            selection_set_disabled(api.selection,
-                                   g_strcmp0(scope, "transmit") == 0 ? SELECT_TRANSMIT : SELECT_DISPLAY,
-                                   disabled);
+            SelectScope which = g_strcmp0(scope, "transmit") == 0 ? SELECT_TRANSMIT : SELECT_DISPLAY;
+            /* Discovery is otherwise only republished on connect, leaving dead entities. */
+            if (selection_set_disabled(api.selection, which, disabled) && which == SELECT_TRANSMIT)
+                mqtt_rediscover(mqtt);
         }
         g_free(scope);
         g_free(disabled);

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **InfluxDB settings:** the "Write to InfluxDB" checkbox now saves, so
+  InfluxDB output can be switched on from the settings page. Saving settings
+  no longer clears a stored InfluxDB API token or password; leave the field
+  empty to keep it.
+- **Alerts:** disabling or deleting a rule while it is firing now clears it.
+  Before, a disabled rule stayed firing for good, and its Axis event stayed
+  active, so action rules kept running. Deleting a rule also removes its
+  retained MQTT alert topic instead of leaving it on the broker.
+- **Home Assistant:** changing which metrics are transmitted now updates
+  discovery right away. Before, the change only reached Home Assistant after
+  the next MQTT reconnect.
+
 ## 0.1.7 - 2026-11-16
 
 - Release 0.1.7.

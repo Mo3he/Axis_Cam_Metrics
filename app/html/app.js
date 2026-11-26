@@ -580,8 +580,9 @@
 
   /* ------------------------------------------------------------- settings */
 
-  var CHECKBOXES = ["MqttEnabled", "MqttTls", "MqttDiscovery", "MqttDiscoveryAll"];
-  var passwordIsSet = false;
+  var CHECKBOXES = ["MqttEnabled", "MqttTls", "MqttDiscovery", "MqttDiscoveryAll", "InfluxEnabled"];
+  /* The API never returns these; it only reports <name>IsSet. */
+  var SECRETS = ["MqttPassword", "InfluxToken", "InfluxPassword"];
 
   function settingsForm() {
     return document.getElementById("settings-form");
@@ -596,9 +597,12 @@
       else field.value = values[key];
     });
 
-    passwordIsSet = values.MqttPasswordIsSet === "yes";
-    form.elements.MqttPassword.value = "";
-    form.elements.MqttPassword.placeholder = passwordIsSet ? "unchanged" : "not set";
+    SECRETS.forEach(function (name) {
+      var field = form.elements[name];
+      if (!field) return;
+      field.value = "";
+      field.placeholder = values[name + "IsSet"] === "yes" ? "unchanged" : "not set";
+    });
 
     var prefix = form.elements.MqttTopicPrefix;
     if (!prefix.value && meta && meta.device && meta.device.serial)
@@ -613,8 +617,8 @@
       if (!field.name) return;
       if (CHECKBOXES.indexOf(field.name) >= 0) {
         body.set(field.name, field.checked ? "yes" : "no");
-      } else if (field.name === "MqttPassword") {
-        /* Empty keeps the stored password; the API never returns it. */
+      } else if (SECRETS.indexOf(field.name) >= 0) {
+        /* Empty keeps the stored secret. */
         if (field.value) body.set(field.name, field.value);
       } else {
         body.set(field.name, field.value);

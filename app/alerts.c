@@ -23,6 +23,8 @@ struct Alerts {
     AXEventHandler *events;
     AlertNotify notify;
     gpointer notify_data;
+    GArray *retired;      /* Declarations of deleted rules awaiting undeclare. */
+    guint retire_source;
 };
 
 /* Ids missing on this device are skipped; filesystem rules are generated per mount. */
@@ -151,6 +153,16 @@ static void send_state(Alerts *alerts, AlertRule *rule) {
     ax_event_key_value_set_free(set);
 }
 
+static void clear_firing(Alerts *alerts, AlertRule *rule) {
+    if (!rule->firing)
+        return;
+    rule->firing = FALSE;
+    send_state(alerts, rule);
+    syslog(LOG_INFO, "alert cleared: %s (%s = %.2f)", rule->name, rule->metric, rule->last_value);
+    if (alerts->notify)
+        alerts->notify(rule, ALERT_CLEARED, alerts->notify_data);
+}
+
 /* --------------------------------------------------------------- lifecycle */
 
 /* Built-ins are code-owned: saved ones from an older version or a vanished
@@ -170,6 +182,7 @@ static void prune_stale_builtins(Alerts *alerts, GHashTable *expected) {
 
 Alerts *alerts_new(const Api *api) {
     Alerts *alerts = g_new0(Alerts, 1);
+    alerts->retired = g_array_new(FALSE, FALSE, sizeof(guint));
     alerts->api = api;
     alerts->events = ax_event_handler_new();
 
@@ -226,11 +239,25 @@ Alerts *alerts_new(const Api *api) {
     return alerts;
 }
 
+static gboolean undeclare_retired(gpointer user_data) {
+    Alerts *alerts = user_data;
+    for (guint i = 0; i < alerts->retired->len; i++)
+        ax_event_handler_undeclare(alerts->events, g_array_index(alerts->retired, guint, i), NULL);
+    g_array_set_size(alerts->retired, 0);
+    alerts->retire_source = 0;
+    return G_SOURCE_REMOVE;
+}
+
 void alerts_free(Alerts *alerts) {
     if (!alerts)
         return;
-    if (alerts->events)
+    if (alerts->retire_source)
+        g_source_remove(alerts->retire_source);
+    if (alerts->events) {
+        undeclare_retired(alerts);
         ax_event_handler_free(alerts->events);
+    }
+    g_array_free(alerts->retired, TRUE);
     g_free(alerts);
 }
 
@@ -262,13 +289,7 @@ void alerts_evaluate(Alerts *alerts, const float *values) {
         gboolean breached = rule->op == ALERT_ABOVE ? value > rule->threshold : value < rule->threshold;
         if (!breached) {
             rule->breach_since = 0;
-            if (rule->firing) {
-                rule->firing = FALSE;
-                send_state(alerts, rule);
-                syslog(LOG_INFO, "alert cleared: %s (%s = %.2f)", rule->name, rule->metric, value);
-                if (alerts->notify)
-                    alerts->notify(rule, FALSE, alerts->notify_data);
-            }
+            clear_firing(alerts, rule);
             continue;
         }
 
@@ -281,7 +302,7 @@ void alerts_evaluate(Alerts *alerts, const float *values) {
             syslog(LOG_WARNING, "alert firing: %s (%s = %.2f, threshold %s %.2f)", rule->name,
                    rule->metric, value, op_name(rule->op), rule->threshold);
             if (alerts->notify)
-                alerts->notify(rule, TRUE, alerts->notify_data);
+                alerts->notify(rule, ALERT_FIRING, alerts->notify_data);
         }
     }
 }
@@ -362,7 +383,20 @@ gboolean alerts_apply(Alerts *alerts, const char *body) {
         /* Built-ins can be disabled but not removed, so a product's default
          * cover cannot be lost by accident. */
         if (rule && !rule->builtin) {
-            undeclare_rule(alerts, rule);
+            gboolean was_firing = rule->firing;
+            /* Clear first so action rules triggered by the event do not stay on. */
+            clear_firing(alerts, rule);
+            if (alerts->notify)
+                alerts->notify(rule, ALERT_REMOVED, alerts->notify_data);
+            if (was_firing && alerts->events && rule->declaration) {
+                /* Undeclaring at once drops the clear just queued, so wait for it to go out. */
+                g_array_append_val(alerts->retired, rule->declaration);
+                rule->declaration = 0;
+                if (!alerts->retire_source)
+                    alerts->retire_source = g_timeout_add_seconds(1, undeclare_retired, alerts);
+            } else {
+                undeclare_rule(alerts, rule);
+            }
             guint index = (guint)(rule - alerts->rules);
             memmove(&alerts->rules[index], &alerts->rules[index + 1],
                     (alerts->count - index - 1) * sizeof(AlertRule));
@@ -402,6 +436,11 @@ gboolean alerts_apply(Alerts *alerts, const char *body) {
         if (duration) rule->duration_s = (guint)g_ascii_strtoull(duration, NULL, 10);
         if (enabled) rule->enabled = g_strcmp0(enabled, "yes") == 0;
         if (!rule->name[0]) g_strlcpy(rule->name, rule->id, sizeof(rule->name));
+        /* Evaluation skips disabled rules, so nothing else would clear it. */
+        if (!rule->enabled) {
+            clear_firing(alerts, rule);
+            rule->breach_since = 0;
+        }
 
         /* The event's nice name is fixed at declaration, so a rename redeclares. */
         if (g_strcmp0(previous_name, rule->name) != 0)

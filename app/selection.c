@@ -86,19 +86,40 @@ gboolean selection_enabled(const Selection *selection, SelectScope scope, const 
     return !g_hash_table_contains(selection->disabled[scope], id);
 }
 
-void selection_set_disabled(Selection *selection, SelectScope scope, const char *csv) {
-    if (scope >= SELECT_SCOPES)
-        return;
+static gboolean same_ids(GHashTable *a, GHashTable *b) {
+    if (g_hash_table_size(a) != g_hash_table_size(b))
+        return FALSE;
+    GHashTableIter iter;
+    gpointer key;
+    g_hash_table_iter_init(&iter, a);
+    while (g_hash_table_iter_next(&iter, &key, NULL)) {
+        if (!g_hash_table_contains(b, key))
+            return FALSE;
+    }
+    return TRUE;
+}
 
-    g_hash_table_remove_all(selection->disabled[scope]);
+gboolean selection_set_disabled(Selection *selection, SelectScope scope, const char *csv) {
+    if (scope >= SELECT_SCOPES)
+        return FALSE;
+
+    GHashTable *fresh = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     gchar **ids = g_strsplit(csv ? csv : "", ",", -1);
     for (gchar **id = ids; *id; id++) {
         gchar *trimmed = g_strstrip(g_strdup(*id));
         if (*trimmed)
-            g_hash_table_add(selection->disabled[scope], trimmed);
+            g_hash_table_add(fresh, trimmed);
         else
             g_free(trimmed);
     }
     g_strfreev(ids);
+
+    if (same_ids(fresh, selection->disabled[scope])) {
+        g_hash_table_destroy(fresh);
+        return FALSE;
+    }
+    g_hash_table_destroy(selection->disabled[scope]);
+    selection->disabled[scope] = fresh;
     save(selection);
+    return TRUE;
 }
