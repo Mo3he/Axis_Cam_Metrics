@@ -1,0 +1,583 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --border: #dcdfe4;
+  --text: #16181d;
+  --muted: #5c6470;
+  --accent: #0b6b7d;
+  --accent-text: #ffffff;
+  --grid: rgb(0 0 0 / 9%);
+  --warn: #9a5b00;
+  --bad: #b42318;
+  --good: #14663c;
+}
+
+/* Kept in one place so "auto" and an explicit dark choice cannot drift apart. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #13151a;
+    --panel: #1d2027;
+    --border: #363d49;
+    --text: #eef0f4;
+    --muted: #aab2bd;
+    --accent: #4fc3d9;
+    --accent-text: #0a1016;
+    --grid: rgb(255 255 255 / 11%);
+    --warn: #f0b429;
+    --bad: #ff8a80;
+    --good: #5bd68f;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #13151a;
+  --panel: #1d2027;
+  --border: #363d49;
+  --text: #eef0f4;
+  --muted: #aab2bd;
+  --accent: #4fc3d9;
+  --accent-text: #0a1016;
+  --grid: rgb(255 255 255 / 11%);
+  --warn: #f0b429;
+  --bad: #ff8a80;
+  --good: #5bd68f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.identity h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.identity p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ranges {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.ranges button {
+  border: 0;
+  padding: 7px 12px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ranges button + button {
+  border-left: 1px solid var(--border);
+}
+
+.ranges button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pill.live {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.pill.error {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.banner {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--warn);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.alerts {
+  margin-bottom: 16px;
+}
+
+.alert {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  border: 1px solid var(--bad);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.alert .alert-name {
+  font-weight: 600;
+}
+
+.alert .alert-detail {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.card .label {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.card .value {
+  margin-top: 4px;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.card .sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.card.warn .value {
+  color: var(--warn);
+}
+
+.card.bad .value {
+  color: var(--bad);
+}
+
+.charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 14px;
+}
+
+.chart {
+  padding: 12px 14px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.chart h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.panel {
+  margin-top: 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.panel-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.panel-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+table.procs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+table.procs th {
+  padding: 4px 8px;
+  text-align: left;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+}
+
+table.procs td {
+  padding: 4px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+table.procs tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+
+table.procs .num {
+  text-align: right;
+}
+
+.rule-list {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+/* Name, metric, condition, threshold, duration, enabled, delete. */
+.rule-columns {
+  grid-template-columns: 1.2fr 1.6fr 8.5rem 8.5rem 8rem auto 2rem;
+}
+
+.rule-head,
+.rule {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+}
+
+.rule-head {
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rule {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.rule:nth-child(odd) {
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
+}
+
+.settings .rule input,
+.settings .rule select {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+/* Overrides the dialog's own "label > span is a block" rule, which would
+   otherwise drop the unit onto its own line under the field. */
+.settings .rule .with-unit {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+}
+
+.settings .rule .with-unit small {
+  display: inline;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.settings .rule label.check {
+  justify-content: center;
+  margin: 0;
+}
+
+.rule button[data-remove] {
+  padding: 3px 8px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.rule .rule-locked {
+  color: var(--muted);
+  text-align: center;
+  font-size: 14px;
+  cursor: help;
+}
+
+@media (max-width: 900px) {
+  .rule-head {
+    display: none;
+  }
+
+  .rule {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The half-filled disc turns with the theme, so the button shows its state
+   without needing three different icons. */
+.theme-toggle svg {
+  transition: transform 0.2s ease;
+}
+
+:root[data-theme="dark"] .theme-toggle svg {
+  transform: rotate(180deg);
+}
+
+.metric-list {
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.metric-group summary {
+  padding: 7px 10px;
+  background: var(--bg);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  position: sticky;
+  top: 0;
+}
+
+.metric-row {
+  display: grid;
+  grid-template-columns: 1fr 70px 70px;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.metric-row:nth-child(odd) {
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+
+.metric-row code {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.metric-head {
+  display: grid;
+  grid-template-columns: 1fr 70px 70px;
+  gap: 6px;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metric-row input,
+.metric-group summary input {
+  justify-self: center;
+}
+
+.footer {
+  margin-top: 20px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.u-legend {
+  font-size: 12px;
+}
+
+/* uPlot keys the legend with a hollow square, which reads poorly for line
+ * series. Collapsing the box to its top border reuses the inline colour uPlot
+ * already sets and draws a short line instead. */
+.u-legend .u-marker {
+  width: 16px;
+  height: 0;
+  border-top-width: 3px !important;
+  border-right-width: 0 !important;
+  border-bottom-width: 0 !important;
+  border-left-width: 0 !important;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+button.ghost,
+button.primary {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.settings {
+  width: min(1080px, 95vw);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.settings::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+.settings form {
+  padding: 18px 20px;
+}
+
+.settings h2 {
+  margin: 0 0 14px;
+  font-size: 17px;
+}
+
+.settings fieldset {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.settings legend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.settings .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.settings label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.settings label > span {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.settings label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings label.check > span {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.settings input[type="text"],
+.settings input[type="password"],
+.settings input[type="number"],
+.settings select {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.settings small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings menu {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.form-error {
+  margin: 0 0 12px;
+  color: var(--bad);
+  font-size: 13px;
+}

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <script src="mock.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Metrics Dashboard</title>
+    <link rel="stylesheet" href="vendor/uPlot.min.css" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="identity">
+        <h1 id="device-model">Metrics</h1>
+        <p id="device-detail">Loading device information</p>
+      </div>
+      <div class="controls">
+        <div class="ranges" id="ranges" role="group" aria-label="Time range"></div>
+        <span class="pill" id="status">connecting</span>
+        <button type="button" class="ghost theme-toggle" id="theme-toggle">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+            <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5" />
+            <path d="M8 1.75a6.25 6.25 0 0 0 0 12.5z" fill="currentColor" />
+          </svg>
+          <span id="theme-label">Auto</span>
+        </button>
+        <button type="button" class="ghost" id="settings-open" hidden>Settings</button>
+      </div>
+    </header>
+
+    <dialog id="settings" class="settings">
+      <form method="dialog" id="settings-form">
+        <h2>Settings</h2>
+
+        <fieldset>
+          <legend>Metrics</legend>
+          <small>
+            Display controls what the dashboard charts. Transmit controls what leaves the device
+            over MQTT. Everything is collected and available on the API either way.
+          </small>
+          <div class="metric-head"><span>Metric</span><span>Display</span><span>Transmit</span></div>
+          <div class="metric-list" id="metric-list"></div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Alert rules</legend>
+          <small>
+            A rule fires once its condition has held for the whole duration, which keeps a brief
+            spike from raising an alarm. Firing rules appear on the dashboard, raise a device event
+            and are published to MQTT. Built-in rules can be adjusted or switched off but not
+            deleted.
+          </small>
+          <div class="rule-head rule-columns">
+            <span>Name</span>
+            <span>Metric</span>
+            <span>Condition</span>
+            <span>Threshold</span>
+            <span>Held for</span>
+            <span>On</span>
+            <span></span>
+          </div>
+          <div class="rule-list" id="rule-list"></div>
+          <button type="button" class="ghost" id="rule-add">Add rule</button>
+        </fieldset>
+
+        <fieldset>
+          <legend>Sampling</legend>
+          <label>
+            <span>Interval</span>
+            <input type="number" name="SampleInterval" min="1" max="10" step="1" />
+            <small>Seconds between samples. A slower interval lengthens the fine-grained window.</small>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>MQTT <span class="pill" id="mqtt-state">disabled</span></legend>
+          <label class="check">
+            <input type="checkbox" name="MqttEnabled" /><span>Publish to a broker</span>
+          </label>
+          <div class="grid">
+            <label><span>Host</span><input type="text" name="MqttHost" placeholder="broker.example.com" /></label>
+            <label><span>Port</span><input type="number" name="MqttPort" min="1" max="65535" /></label>
+            <label><span>Username</span><input type="text" name="MqttUsername" autocomplete="off" /></label>
+            <label><span>Password</span><input type="password" name="MqttPassword" autocomplete="new-password" /></label>
+            <label><span>Topic prefix</span><input type="text" name="MqttTopicPrefix" /></label>
+            <label><span>Publish every</span><input type="number" name="MqttInterval" min="1" max="3600" /></label>
+          </div>
+          <label class="check">
+            <input type="checkbox" name="MqttTls" /><span>Use TLS</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" name="MqttDiscovery" /><span>Home Assistant discovery</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" name="MqttDiscoveryAll" /><span>Discover every metric, not just the essentials</span>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>InfluxDB <span class="pill" id="influx-state">disabled</span></legend>
+          <small>
+            Writes the transmitted metrics as line protocol. Everything goes into one measurement,
+            one field per metric, tagged with the device serial and model.
+          </small>
+          <label class="check">
+            <input type="checkbox" name="InfluxEnabled" /><span>Write to InfluxDB</span>
+          </label>
+          <div class="grid">
+            <label>
+              <span>Version</span>
+              <select name="InfluxVersion">
+                <option value="v2">2.x</option>
+                <option value="v1">1.x</option>
+              </select>
+            </label>
+            <label><span>Server URL</span><input type="text" name="InfluxUrl" placeholder="http://influx.example.com:8086" /></label>
+            <label><span id="influx-database-label">Bucket</span><input type="text" name="InfluxDatabase" /></label>
+            <label><span>Publish every</span><input type="number" name="InfluxInterval" min="1" max="3600" /></label>
+            <label><span>Measurement</span><input type="text" name="InfluxMeasurement" /></label>
+          </div>
+          <div class="grid" id="influx-v2-fields">
+            <label><span>Organisation</span><input type="text" name="InfluxOrg" /></label>
+            <label><span>API token</span><input type="password" name="InfluxToken" autocomplete="new-password" /></label>
+          </div>
+          <div class="grid" id="influx-v1-fields">
+            <label><span>Username</span><input type="text" name="InfluxUsername" autocomplete="off" /></label>
+            <label><span>Password</span><input type="password" name="InfluxPassword" autocomplete="new-password" /></label>
+          </div>
+        </fieldset>
+
+        <p class="form-error" id="settings-error" hidden></p>
+        <menu>
+          <button type="button" class="ghost" id="settings-cancel">Cancel</button>
+          <button type="button" class="primary" id="settings-save">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <p class="banner" id="banner" hidden></p>
+
+    <section class="alerts" id="alerts" hidden></section>
+
+    <section class="cards" id="cards"></section>
+
+    <section class="charts" id="charts"></section>
+
+    <section class="panel" id="procs-panel" hidden>
+      <div class="panel-head">
+        <h2>Top processes</h2>
+        <span class="panel-note" id="procs-note"></span>
+      </div>
+      <table class="procs">
+        <thead>
+          <tr><th>Process</th><th>PID</th><th class="num">CPU</th><th class="num">Memory</th></tr>
+        </thead>
+        <tbody id="procs-body"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" id="dlpu-panel" hidden>
+      <div class="panel-head">
+        <h2>Loaded models</h2>
+        <span class="panel-note" id="dlpu-note"></span>
+      </div>
+      <table class="procs">
+        <thead>
+          <tr><th>Model</th><th>Device</th><th class="num">Size</th></tr>
+        </thead>
+        <tbody id="dlpu-body"></tbody>
+      </table>
+    </section>
+
+    <footer class="footer">
+      <span id="footer-text"></span>
+    </footer>
+
+    <script src="vendor/uPlot.iife.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
