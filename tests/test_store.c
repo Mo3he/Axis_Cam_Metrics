@@ -53,23 +53,23 @@ static void test_downsampling(void) {
         store_push(store, values, base + i);
     }
 
-    float row[2];
+    float row[2] = {0};
     gint64 timestamp = 0;
     CHECK(store_tier_count(store, 0) == 30, "fine tier kept every sample");
     CHECK(store_tier_count(store, 1) >= 1, "medium tier produced a bucket");
 
-    if (store_tier_sample(store, 1, 0, row, &timestamp)) {
-        /* Closes at +15s: fifteen 10s plus the first 20 that triggered the flush. */
-        CHECK(row[0] > 10.0 && row[0] <= 11.0, "bucket mean sits between the two levels (%.3f)", row[0]);
-    }
+    gboolean sampled = store_tier_sample(store, 1, 0, row, &timestamp);
+    CHECK(sampled, "medium tier bucket can be read");
+    /* Closes at +15s: fifteen 10s plus the first 20 that triggered the flush. */
+    CHECK(sampled && row[0] > 10.0 && row[0] <= 11.0, "bucket mean sits between the two levels (%.3f)", row[0]);
 
     Store *sparse = store_new(&registry, 1);
     for (int i = 0; i < 20; i++) {
         float values[2] = {i % 2 ? 100.0f : NAN, 0.0f};
         store_push(sparse, values, base + i);
     }
-    if (store_tier_sample(sparse, 1, 0, row, &timestamp))
-        CHECK(close_enough(row[0], 100.0), "NaN skipped rather than averaged as zero (%.3f)", row[0]);
+    sampled = store_tier_sample(sparse, 1, 0, row, &timestamp);
+    CHECK(sampled && close_enough(row[0], 100.0), "NaN skipped rather than averaged as zero (%.3f)", row[0]);
 
     store_free(store);
     store_free(sparse);
