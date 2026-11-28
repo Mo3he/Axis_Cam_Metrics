@@ -1,6 +1,5 @@
 # Changelog
 
-
 ## Unreleased
 
 - Fix the 12 hour, 7 day and 30 day ranges on devices that have kept history
