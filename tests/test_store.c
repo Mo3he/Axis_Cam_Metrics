@@ -11,6 +11,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 static int failures;
 
@@ -171,11 +173,119 @@ static void test_fine_interval_change(void) {
     metrics_registry_clear(&registry);
 }
 
+/* A full ring whose header was last flushed before the newest appends (an
+ * unclean stop) must still come back in time order: the slots after the
+ * stale head hold the newest samples, not the oldest. */
+static void test_restore_full_ring_with_stale_header(void) {
+    printf("restore full ring with stale header\n");
+
+    const char *ids[] = {"a"};
+    MetricRegistry registry;
+    register_metrics(&registry, ids, 1);
+    Store *store = store_new(&registry, 1);
+    const guint tier = 2;
+    StoreTier *coarse = &store->tiers[tier];
+    guint capacity = coarse->capacity;
+
+    char directory[] = "/tmp/metrics-persist-XXXXXX";
+    CHECK(mkdtemp(directory) != NULL, "temporary directory");
+    char path[600];
+    g_snprintf(path, sizeof(path), "%s/history.bin", directory);
+    Persist *persist = persist_open_in(&registry, coarse, directory, "history.bin");
+    CHECK(persist != NULL, "history file opened");
+    persist_sync(persist, store, tier); /* writes the header and metric ids, as at startup */
+
+    gint64 base = 4000000;
+    guint total = capacity + 30;
+    char header[4096];
+    for (guint i = 0; i < total; i++) {
+        float values[1] = {(float)i};
+        persist_append(persist, values, base + (gint64)i * coarse->interval_s);
+        if (i + 1 == capacity) {
+            /* The header as flushed when the ring filled up. */
+            int f = open(path, O_RDONLY);
+            CHECK(pread(f, header, sizeof(header), 0) == (ssize_t)sizeof(header), "header read");
+            close(f);
+        }
+    }
+    persist_close(persist);
+    /* An unclean stop: the file keeps that older header, 30 samples behind. */
+    int f = open(path, O_WRONLY);
+    CHECK(pwrite(f, header, sizeof(header), 0) == (ssize_t)sizeof(header), "stale header written back");
+    close(f);
+
+    Store *reloaded = store_new(&registry, 1);
+    Persist *again = persist_open_in(&registry, &reloaded->tiers[tier], directory, "history.bin");
+    guint restored = persist_load(again, reloaded, tier);
+    CHECK(restored == capacity, "a full ring restored (%u of %u)", restored, capacity);
+
+    gboolean ordered = TRUE;
+    gint64 previous = 0, timestamp = 0;
+    float row[1];
+    for (guint i = 0; store_tier_sample(reloaded, tier, i, row, &timestamp); i++) {
+        if (timestamp <= previous)
+            ordered = FALSE;
+        previous = timestamp;
+    }
+    CHECK(ordered, "restored samples are in time order");
+    CHECK(previous == base + (gint64)(total - 1) * coarse->interval_s, "the newest sample is the last appended");
+
+    gint64 since = previous - 12 * 3600;
+    gint64 *timestamps = g_new(gint64, capacity);
+    float *values = g_new(float, capacity);
+    guint n = store_series(reloaded, tier, 0, since, timestamps, values, capacity);
+    CHECK(n > 0 && timestamps[0] >= since, "a 12 h query starts inside the window (%u points)", n);
+
+    g_free(timestamps);
+    g_free(values);
+    persist_close(again);
+    unlink(path);
+    rmdir(directory);
+    store_free(reloaded);
+    store_free(store);
+    metrics_registry_clear(&registry);
+}
+
+/* The clock can step backwards (NTP correcting a wrong time); a window query
+ * must still return only samples inside the window. */
+static void test_series_query_after_clock_step_back(void) {
+    printf("series query after the clock steps back\n");
+
+    const char *ids[] = {"a"};
+    MetricRegistry registry;
+    register_metrics(&registry, ids, 1);
+    Store *store = store_new(&registry, 1);
+
+    /* Five samples at the right time, then the clock is set back a day. */
+    gint64 right = 5000000, earlier = right - 86400;
+    for (int i = 0; i < 5; i++) {
+        float values[1] = {1.0f};
+        store_push(store, values, right + i);
+    }
+    for (int i = 0; i < 5; i++) {
+        float values[1] = {2.0f};
+        store_push(store, values, earlier + i);
+    }
+    gint64 timestamps[16];
+    float values[16];
+    guint n = store_series(store, 0, 0, right, timestamps, values, 16);
+    gboolean inside = TRUE;
+    for (guint i = 0; i < n; i++)
+        if (timestamps[i] < right)
+            inside = FALSE;
+    CHECK(n == 5 && inside, "only the samples inside the window (%u)", n);
+
+    store_free(store);
+    metrics_registry_clear(&registry);
+}
+
 int main(void) {
     test_downsampling();
     test_window_selection();
     test_series_query();
     test_fine_interval_change();
+    test_restore_full_ring_with_stale_header();
+    test_series_query_after_clock_step_back();
 
     printf("\n%s\n", failures ? "FAILED" : "all tests passed");
     return failures ? 1 : 0;

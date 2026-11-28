@@ -1,5 +1,15 @@
 # Changelog
 
+
+## Unreleased
+
+- Fix the 12 hour, 7 day and 30 day ranges on devices that have kept history
+  for 30 days: after a restart they returned the whole 30-day buffer out of
+  order. The history file's index is written only periodically, so after an
+  unclean stop the newest samples were read as the oldest. History is now
+  restored in time order from every record on the card (which also keeps the
+  last samples before an unclean stop), and range queries select samples by
+  time, so a clock set backwards cannot break them either.
 ## 0.1.9 - 2026-11-26
 
 - Release 0.1.9.

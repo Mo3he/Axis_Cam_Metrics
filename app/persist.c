@@ -208,7 +208,11 @@ Persist *persist_open(const MetricRegistry *registry, const StoreTier *tier, con
     g_snprintf(directory, sizeof(directory), "%s/%s", base, APP_SUBDIR);
     if (!ensure_own_directory(directory))
         return NULL;
+    return persist_open_in(registry, tier, directory, filename);
+}
 
+Persist *persist_open_in(const MetricRegistry *registry, const StoreTier *tier, const char *directory,
+                         const char *filename) {
     Persist *persist = g_new0(Persist, 1);
     persist->n_metrics = registry->count;
     persist->capacity = tier->capacity;
@@ -268,6 +272,12 @@ static void initialise_file(Persist *persist, const MetricRegistry *registry) {
         syslog(LOG_WARNING, "cannot size %s: %s", persist->path, g_strerror(errno));
 }
 
+/* Orders history slots by timestamp (each record starts with its gint64). */
+static gint compare_slots(gconstpointer a, gconstpointer b) {
+    gint64 x = *(const gint64 *)a, y = *(const gint64 *)b;
+    return x < y ? -1 : x > y;
+}
+
 guint persist_load(Persist *persist, Store *store, guint tier_index) {
     if (!persist)
         return 0;
@@ -308,20 +318,33 @@ guint persist_load(Persist *persist, Store *store, guint tier_index) {
     char *raw = g_malloc0(saved_record_bytes);
     float *values = g_new(float, store->n_metrics);
 
-    guint restored = 0;
-    guint count = MIN(header.count, header.capacity);
-    guint start = (header.head + header.capacity - count) % header.capacity;
-
-    for (guint i = 0; i < count; i++) {
-        guint slot = (start + i) % header.capacity;
+    /* The header index is flushed only every HEADER_FLUSH_EVERY appends, so
+     * after an unclean stop it can be behind: in a full ring the slots after
+     * it then hold the newest samples, not the oldest. Every written slot is
+     * read and the samples restored in time order instead. */
+    typedef struct {
+        gint64 timestamp;
+        guint slot;
+    } Slot;
+    GArray *slots = g_array_sized_new(FALSE, FALSE, sizeof(Slot), header.capacity);
+    for (guint slot = 0; slot < header.capacity; slot++) {
+        gint64 timestamp;
         off_t offset = (off_t)(saved_records_offset + (gsize)slot * saved_record_bytes);
+        if (!read_at(persist->fd, &timestamp, sizeof(timestamp), offset))
+            break;
+        if (timestamp > 0) {
+            Slot entry = {timestamp, slot};
+            g_array_append_val(slots, entry);
+        }
+    }
+    g_array_sort(slots, compare_slots);
+
+    guint restored = 0;
+    for (guint i = 0; i < slots->len; i++) {
+        const Slot *entry = &g_array_index(slots, Slot, i);
+        off_t offset = (off_t)(saved_records_offset + (gsize)entry->slot * saved_record_bytes);
         if (!read_at(persist->fd, raw, saved_record_bytes, offset))
             break;
-
-        gint64 timestamp;
-        memcpy(&timestamp, raw, sizeof(timestamp));
-        if (timestamp <= 0)
-            continue;
 
         for (guint m = 0; m < store->n_metrics; m++)
             values[m] = NAN;
@@ -331,9 +354,10 @@ guint persist_load(Persist *persist, Store *store, guint tier_index) {
                 values[mapping[m]] = saved_values[m];
         }
 
-        store_restore(store, tier_index, values, timestamp);
+        store_restore(store, tier_index, values, entry->timestamp);
         restored++;
     }
+    g_array_free(slots, TRUE);
 
     g_free(raw);
     g_free(values);
