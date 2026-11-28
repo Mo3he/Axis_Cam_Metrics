@@ -308,10 +308,13 @@ guint store_series(Store *store,
     guint written = 0;
     guint start = (tier->head + tier->capacity - tier->count) % tier->capacity;
 
-    guint first = 0;
-    while (first < tier->count && tier->timestamps[(start + first) % tier->capacity] < since)
-        first++;
-    guint matched = tier->count - first;
+    /* Selected by time, not by skipping a prefix: after a clock step back the
+     * ring is not in time order, and a window must still hold only its own
+     * samples. */
+    guint matched = 0;
+    for (guint i = 0; i < tier->count; i++)
+        if (tier->timestamps[(start + i) % tier->capacity] >= since)
+            matched++;
 
     /* Too many samples for the cap: average fixed-size buckets so the result
      * still spans the whole window up to the newest sample. The bucketing
@@ -320,20 +323,28 @@ guint store_series(Store *store,
     if (stride < 1)
         stride = 1;
 
-    for (guint i = first; i < tier->count; i += stride) {
-        guint end = MIN(i + stride, tier->count);
-        double sum = 0.0;
-        guint n = 0;
-        gint64 ts = 0;
-        for (guint j = i; j < end; j++) {
-            guint slot = (start + j) % tier->capacity;
-            float v = tier->data[(gsize)slot * store->n_metrics + metric_index];
-            if (!isnan(v)) {
-                sum += v;
-                n++;
-            }
-            ts = tier->timestamps[slot];
+    double sum = 0.0;
+    guint n = 0, in_bucket = 0;
+    gint64 ts = 0;
+    for (guint i = 0; i < tier->count && written < max_points; i++) {
+        guint slot = (start + i) % tier->capacity;
+        if (tier->timestamps[slot] < since)
+            continue;
+        float v = tier->data[(gsize)slot * store->n_metrics + metric_index];
+        if (!isnan(v)) {
+            sum += v;
+            n++;
         }
+        ts = tier->timestamps[slot];
+        if (++in_bucket == stride) {
+            timestamps[written] = ts;
+            values[written] = n ? (float)(sum / n) : NAN;
+            written++;
+            sum = 0.0;
+            n = in_bucket = 0;
+        }
+    }
+    if (in_bucket && written < max_points) {
         timestamps[written] = ts;
         values[written] = n ? (float)(sum / n) : NAN;
         written++;

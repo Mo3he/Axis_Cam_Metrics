@@ -9,6 +9,9 @@ typedef struct Persist Persist;
 /* Opens one tier's history file on SD card or disk. Returns NULL when there is
  * no such storage, in which case history stays memory-only. */
 Persist *persist_open(const MetricRegistry *registry, const StoreTier *tier, const char *filename);
+/* Opens one tier's history file in a given directory (persist_open picks it). */
+Persist *persist_open_in(const MetricRegistry *registry, const StoreTier *tier, const char *directory,
+                         const char *filename);
 void persist_close(Persist *persist);
 
 /* Restores saved samples, remapped by metric id so a changed metric set does not

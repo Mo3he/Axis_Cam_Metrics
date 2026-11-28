@@ -275,8 +275,9 @@ disk, so all ranges from 5 minutes to 30 days survive a restart or reboot.
 
 The index in each file header is flushed periodically rather than on every
 sample, because rewriting a 4 KB header once a second would cost far more wear
-than the sample itself. An unclean shutdown therefore loses the last few samples
-of a tier rather than its whole recording.
+than the sample itself. On start the app therefore reads every record and
+restores them in time order rather than trusting the index, so an unclean
+shutdown loses nothing that reached the card.
 
 It is deliberately never written to flash. A recorder has around 144 MB free on
 `/mnt/flash`, and that wear belongs on removable storage. If the device has no

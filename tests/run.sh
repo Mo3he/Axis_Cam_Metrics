@@ -29,7 +29,7 @@ trap 'rm -rf "$OUT"' EXIT
 # shellcheck disable=SC2086
 $CC -Wall -Wextra -Werror -g -O1 $GLIB_CFLAGS \
 	-o "$OUT/test_store" \
-	tests/test_store.c app/store.c app/metrics.c \
+	tests/test_store.c app/store.c app/metrics.c app/persist.c \
 	$GLIB_LIBS -lm
 
 "$OUT/test_store"
