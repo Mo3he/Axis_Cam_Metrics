@@ -246,6 +246,89 @@ static void test_restore_full_ring_with_stale_header(void) {
     metrics_registry_clear(&registry);
 }
 
+/* When the metric set shrinks, the file is laid out again with smaller
+ * records; bytes left from the old layout must not come back as samples,
+ * including in files written before the records were cleared. */
+static void test_restore_after_metric_set_shrinks(void) {
+    printf("restore after the metric set shrinks\n");
+
+    const char *wide_ids[] = {"a", "b", "c"};
+    const char *narrow_ids[] = {"a"};
+    MetricRegistry wide, narrow;
+    register_metrics(&wide, wide_ids, 3);
+    register_metrics(&narrow, narrow_ids, 1);
+    const guint tier = 2;
+    const guint written = 100;
+
+    char directory[] = "/tmp/metrics-persist-XXXXXX";
+    CHECK(mkdtemp(directory) != NULL, "temporary directory");
+    char path[600];
+    g_snprintf(path, sizeof(path), "%s/history.bin", directory);
+
+    Store *store = store_new(&wide, 1);
+    StoreTier *coarse = &store->tiers[tier];
+    gint64 base = 4000000;
+    Persist *persist = persist_open_in(&wide, coarse, directory, "history.bin");
+    persist_sync(persist, store, tier);
+    for (guint i = 0; i < written; i++) {
+        float values[3] = {1.0f, 1.0f, 1.0f};
+        persist_append(persist, values, base + (gint64)i * coarse->interval_s);
+    }
+    persist_close(persist);
+    store_free(store);
+
+    /* Restart with one metric: the 100 samples move to the smaller layout. */
+    store = store_new(&narrow, 1);
+    persist = persist_open_in(&narrow, &store->tiers[tier], directory, "history.bin");
+    CHECK(persist_load(persist, store, tier) == written, "samples restored into the smaller set");
+    persist_sync(persist, store, tier);
+    persist_close(persist);
+    store_free(store);
+
+    off_t records = 4096 + METRIC_ID_MAX;
+    off_t record = sizeof(gint64) + sizeof(float);
+    unsigned char after[64];
+    int f = open(path, O_RDWR);
+    CHECK(pread(f, after, sizeof(after), records + written * record) == (ssize_t)sizeof(after),
+          "slots after the samples read");
+    gboolean zero = TRUE;
+    for (gsize i = 0; i < sizeof(after); i++)
+        if (after[i])
+            zero = FALSE;
+    CHECK(zero, "the old layout's bytes are cleared");
+
+    /* A file from before that clearing: old-layout bytes (here 1.0f pairs,
+     * read as a timestamp far in the future) follow the samples, and the
+     * header, flushed at 60, is behind them after an unclean stop. */
+    float stale[64];
+    for (gsize i = 0; i < G_N_ELEMENTS(stale); i++)
+        stale[i] = 1.0f;
+    CHECK(pwrite(f, stale, sizeof(stale), records + written * record) == (ssize_t)sizeof(stale),
+          "old-layout bytes written");
+    guint32 count = 60;
+    CHECK(pwrite(f, &count, sizeof(count), 8 + 5 * sizeof(guint32)) == (ssize_t)sizeof(count),
+          "header count set back");
+    close(f);
+
+    store = store_new(&narrow, 1);
+    persist = persist_open_in(&narrow, &store->tiers[tier], directory, "history.bin");
+    guint restored = persist_load(persist, store, tier);
+    CHECK(restored == written, "only the samples restored (%u of %u)", restored, written);
+    gint64 newest = 0, timestamp = 0;
+    float row[1];
+    for (guint i = 0; store_tier_sample(store, tier, i, row, &timestamp); i++)
+        newest = timestamp;
+    CHECK(newest == base + (gint64)(written - 1) * store->tiers[tier].interval_s,
+          "the newest sample is the last written");
+    persist_close(persist);
+    store_free(store);
+
+    unlink(path);
+    rmdir(directory);
+    metrics_registry_clear(&wide);
+    metrics_registry_clear(&narrow);
+}
+
 /* The clock can step backwards (NTP correcting a wrong time); a window query
  * must still return only samples inside the window. */
 static void test_series_query_after_clock_step_back(void) {
@@ -285,6 +368,7 @@ int main(void) {
     test_series_query();
     test_fine_interval_change();
     test_restore_full_ring_with_stale_header();
+    test_restore_after_metric_set_shrinks();
     test_series_query_after_clock_step_back();
 
     printf("\n%s\n", failures ? "FAILED" : "all tests passed");

@@ -267,7 +267,10 @@ static void initialise_file(Persist *persist, const MetricRegistry *registry) {
     g_free(table);
 
     write_header(persist);
-    if (ftruncate(persist->fd, (off_t)(persist->records_offset +
+    /* Truncating to the records first zeroes them, so samples in an older
+     * layout cannot be read back as records of this one. */
+    if (ftruncate(persist->fd, (off_t)persist->records_offset) != 0 ||
+        ftruncate(persist->fd, (off_t)(persist->records_offset +
                                        (gsize)persist->capacity * persist->record_bytes)) != 0)
         syslog(LOG_WARNING, "cannot size %s: %s", persist->path, g_strerror(errno));
 }
@@ -321,21 +324,34 @@ guint persist_load(Persist *persist, Store *store, guint tier_index) {
     /* The header index is flushed only every HEADER_FLUSH_EVERY appends, so
      * after an unclean stop it can be behind: in a full ring the slots after
      * it then hold the newest samples, not the oldest. Every written slot is
-     * read and the samples restored in time order instead. */
+     * read and the samples restored in time order instead.
+     *
+     * A ring that is not full holds samples only up to the saved count plus
+     * at most one flush interval. Files from before the records were zeroed
+     * on layout changes can hold older-layout bytes after that, so those
+     * unflushed slots are only taken while they continue the sequence. */
     typedef struct {
         gint64 timestamp;
         guint slot;
     } Slot;
-    GArray *slots = g_array_sized_new(FALSE, FALSE, sizeof(Slot), header.capacity);
-    for (guint slot = 0; slot < header.capacity; slot++) {
+    gboolean full = header.count >= header.capacity;
+    guint scan = full ? header.capacity : MIN(header.capacity, header.count + HEADER_FLUSH_EVERY);
+    gint64 latest = g_get_real_time() / G_USEC_PER_SEC + 86400;
+    gint64 previous = 0;
+    GArray *slots = g_array_sized_new(FALSE, FALSE, sizeof(Slot), scan);
+    for (guint slot = 0; slot < scan; slot++) {
         gint64 timestamp;
         off_t offset = (off_t)(saved_records_offset + (gsize)slot * saved_record_bytes);
         if (!read_at(persist->fd, &timestamp, sizeof(timestamp), offset))
+            break;
+        if (!full && slot >= header.count &&
+            (timestamp <= 0 || timestamp < previous || timestamp > latest))
             break;
         if (timestamp > 0) {
             Slot entry = {timestamp, slot};
             g_array_append_val(slots, entry);
         }
+        previous = timestamp;
     }
     g_array_sort(slots, compare_slots);
 
