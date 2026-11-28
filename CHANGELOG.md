@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Stopping or restarting the app took 10 s longer than needed whenever alert
+  rules exist: freeing the event handler after the main loop stopped waited for
+  a reply that never came. The event service drops the alert events when the
+  app exits, so at exit the app no longer frees them itself.
+
 ## 0.1.9 - 2026-11-26
 
 - Release 0.1.9.

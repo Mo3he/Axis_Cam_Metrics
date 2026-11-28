@@ -248,17 +248,29 @@ static gboolean undeclare_retired(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
-void alerts_free(Alerts *alerts) {
+static void alerts_release(Alerts *alerts, gboolean undeclare) {
     if (!alerts)
         return;
     if (alerts->retire_source)
         g_source_remove(alerts->retire_source);
-    if (alerts->events) {
+    if (undeclare && alerts->events) {
         undeclare_retired(alerts);
         ax_event_handler_free(alerts->events);
     }
+    alerts->events = NULL;
     g_array_free(alerts->retired, TRUE);
     g_free(alerts);
+}
+
+void alerts_free(Alerts *alerts) {
+    alerts_release(alerts, TRUE);
+}
+
+/* Not ax_event_handler_free() (nor undeclaring): with the main loop stopped,
+ * each call waits 10 s for a reply, which made every stop take 10 s. The
+ * process is exiting and the event service drops its declarations. */
+void alerts_abandon(Alerts *alerts) {
+    alerts_release(alerts, FALSE);
 }
 
 void alerts_set_notify(Alerts *alerts, AlertNotify notify, gpointer user_data) {
