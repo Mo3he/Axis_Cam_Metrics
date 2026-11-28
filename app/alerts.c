@@ -253,10 +253,11 @@ void alerts_free(Alerts *alerts) {
         return;
     if (alerts->retire_source)
         g_source_remove(alerts->retire_source);
-    if (alerts->events) {
-        undeclare_retired(alerts);
-        ax_event_handler_free(alerts->events);
-    }
+    /* Not ax_event_handler_free() (nor undeclaring): with the main loop
+     * stopped, each call waits 10 s for a reply, which made every stop take
+     * 10 s. The process is exiting and the event service drops its
+     * declarations. */
+    alerts->events = NULL;
     g_array_free(alerts->retired, TRUE);
     g_free(alerts);
 }
