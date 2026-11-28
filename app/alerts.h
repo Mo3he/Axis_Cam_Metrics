@@ -26,7 +26,10 @@ typedef struct {
 typedef struct Alerts Alerts;
 
 Alerts *alerts_new(const Api *api);
+/* Undeclares the alert events; needs a running main loop. */
 void alerts_free(Alerts *alerts);
+/* For process exit, after the main loop stops: skips undeclaring. */
+void alerts_abandon(Alerts *alerts);
 
 /* Evaluates every rule against the latest sample. */
 void alerts_evaluate(Alerts *alerts, const float *values);

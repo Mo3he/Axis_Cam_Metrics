@@ -822,7 +822,7 @@ int main(void) {
     for (gsize i = 0; i < G_N_ELEMENTS(parameters); i++)
         g_free(parameters[i].value);
     g_free(sample_buffer);
-    alerts_free(alerts);
+    alerts_abandon(alerts);
     mqtt_free(mqtt);
     influx_free(influx);
     procs_free(procs);
