@@ -158,6 +158,7 @@ static void publish_discovery(Mqtt *mqtt, gboolean withdraw_stale) {
     gboolean named_sensors = has_named_sensors(mqtt);
     guint published = 0;
     guint retracted = 0;
+    guint failed = 0;
 
     for (guint i = 0; i < mqtt->api->registry->count; i++) {
         const MetricDef *def = &mqtt->api->registry->defs[i];
@@ -180,8 +181,10 @@ static void publish_discovery(Mqtt *mqtt, gboolean withdraw_stale) {
          * removes them. Only once per broker, so a flapping link cannot spam. */
         if (!wanted) {
             if (withdraw_stale) {
-                publish(mqtt, config_topic, "", 0, 1, 0);
-                retracted++;
+                if (publish(mqtt, config_topic, "", 0, 1, 0) == MQTTASYNC_SUCCESS)
+                    retracted++;
+                else
+                    failed++;
             }
             continue;
         }
@@ -219,13 +222,17 @@ static void publish_discovery(Mqtt *mqtt, gboolean withdraw_stale) {
         g_free(unique_id);
         g_free(value_template);
 
-        publish(mqtt, config_topic, payload->str, 0, 1, 0);
+        if (publish(mqtt, config_topic, payload->str, 0, 1, 0) == MQTTASYNC_SUCCESS)
+            published++;
+        else
+            failed++;
         g_string_free(payload, TRUE);
-        published++;
     }
 
     syslog(LOG_INFO, "published %u Home Assistant discovery configs, withdrew %u", published,
            retracted);
+    if (failed)
+        syslog(LOG_WARNING, "%u Home Assistant discovery messages could not be queued", failed);
     mqtt->discovery_sent = TRUE;
 }
 
@@ -322,6 +329,10 @@ static void connect_now(Mqtt *mqtt) {
 
     MQTTAsync_createOptions create = MQTTAsync_createOptions_initializer;
     create.MQTTVersion = MQTTVERSION_3_1_1;
+    /* The limit counts every queued publish, connected or not, and the default
+     * of 100 is less than one discovery pass on most cameras: the overflow was
+     * dropped, leaving a dead or missing Home Assistant entity. */
+    create.maxBufferedMessages = 4096;
     if (MQTTAsync_createWithOptions(&mqtt->client, mqtt->address, mqtt->client_id,
                                     MQTTCLIENT_PERSISTENCE_NONE, NULL, &create) != MQTTASYNC_SUCCESS) {
         syslog(LOG_ERR, "mqtt client creation failed for %s", mqtt->address);

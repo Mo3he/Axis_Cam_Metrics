@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Home Assistant:** discovery messages past the 100th in one pass were
+  dropped. Turning "all metrics" off could leave an entity behind (seen with
+  "larod clients"), and turning it on could miss one. The MQTT client now
+  queues enough messages for a full pass, and logs any that fail.
+
 ## 0.1.9 - 2026-11-26
 
 - Release 0.1.9.
