@@ -10,6 +10,7 @@
   restored in time order from every record on the card (which also keeps the
   last samples before an unclean stop), and range queries select samples by
   time, so a clock set backwards cannot break them either.
+
 ## 0.1.9 - 2026-11-26
 
 - Release 0.1.9.
