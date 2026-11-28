@@ -365,14 +365,23 @@ static void undeclare_rule(Alerts *alerts, AlertRule *rule) {
     rule->declaration = 0;
 }
 
-gboolean alerts_apply(Alerts *alerts, const char *body) {
+gboolean alerts_apply(Alerts *alerts, const char *body, const char **error) {
     gchar *action = field(body, "action");
     gchar *id = field(body, "id");
     gboolean changed = FALSE;
+    const char *problem = NULL;
 
-    if (!action || !id || !rule_id_is_valid(id)) {
-        if (id)
-            syslog(LOG_WARNING, "rejected alert rule with invalid id");
+    if (!action || !id) {
+        problem = "action and id are required";
+    } else if (!rule_id_is_valid(id)) {
+        syslog(LOG_WARNING, "rejected alert rule with invalid id");
+        problem = "invalid rule id: use 1-47 letters, digits, '_' or '-'";
+    } else if (g_strcmp0(action, "delete") != 0 && g_strcmp0(action, "save") != 0) {
+        problem = "action must be save or delete";
+    }
+    if (problem) {
+        if (error)
+            *error = problem;
         g_free(action);
         g_free(id);
         return FALSE;
@@ -382,6 +391,8 @@ gboolean alerts_apply(Alerts *alerts, const char *body) {
         AlertRule *rule = find_rule(alerts, id);
         /* Built-ins can be disabled but not removed, so a product's default
          * cover cannot be lost by accident. */
+        if (rule && rule->builtin && error)
+            *error = "built-in rules can be disabled but not deleted";
         if (rule && !rule->builtin) {
             gboolean was_firing = rule->firing;
             /* Clear first so action rules triggered by the event do not stay on. */
@@ -410,6 +421,8 @@ gboolean alerts_apply(Alerts *alerts, const char *body) {
             memset(&fresh, 0, sizeof(fresh));
             g_strlcpy(fresh.id, id, sizeof(fresh.id));
             if (!add_rule(alerts, &fresh)) {
+                if (error)
+                    *error = "rule limit reached (" G_STRINGIFY(MAX_RULES) " rules)";
                 g_free(action);
                 g_free(id);
                 return FALSE;

@@ -622,8 +622,15 @@ static gboolean handle_request(GSocketConnection *connection,
     } else if (is_get && route_is(path, "alerts")) {
         send_json(out, alerts_json(alerts));
     } else if (strcmp(method, "POST") == 0 && route_is(path, "rules")) {
-        alerts_apply(alerts, body);
-        send_json(out, alerts_json(alerts));
+        const char *error = NULL;
+        alerts_apply(alerts, body, &error);
+        if (error) {
+            gchar *json = g_strdup_printf("{\"error\":\"%s\"}", error);
+            send_response(out, "400 Bad Request", "application/json", json);
+            g_free(json);
+        } else {
+            send_json(out, alerts_json(alerts));
+        }
     } else if (strcmp(method, "POST") == 0 && route_is(path, "metrics")) {
         gchar *scope = api_query_param(body, "scope");
         gchar *disabled = api_query_param(body, "disabled");

@@ -867,6 +867,11 @@
       credentials: "same-origin",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString()
+    }).then(function (r) {
+      if (r.ok) return r;
+      return r.json().catch(function () { return {}; }).then(function (payload) {
+        throw new Error("Rule " + body.get("id") + ": " + (payload.error || "save failed (" + r.status + ")"));
+      });
     });
   }
 
