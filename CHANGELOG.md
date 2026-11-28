@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Alerts:** the rules API now answers 400 with the reason when it rejects a
+  change: an invalid rule id, a full rule table (64 rules), deleting a built-in
+  rule, or an unknown action. Before, it answered 200 and dropped the change,
+  so the settings dialog closed as if the rule was saved. The dialog now shows
+  the error.
+
 ## 0.1.9 - 2026-11-26
 
 - Release 0.1.9.
